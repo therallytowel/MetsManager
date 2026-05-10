@@ -6,16 +6,24 @@ import pytz
 from atproto import Client
 
 def format_name(full_name):
-    clean_name = str(full_name).replace('Jr.', '').replace('Sr.', '').strip()
+    # Removes B-Ref technical markers (* for lefties, # for switch hitters, etc.)
+    # but preserves suffixes like Jr. and Sr.
+    clean_name = str(full_name).replace('*', '').replace('#', '').replace('?', '').strip()
+    
     parts = clean_name.split()
     if len(parts) >= 2:
+        # If the last part is a suffix, we treat the second-to-last part as the surname
+        suffixes = ['Jr.', 'Sr.', 'II', 'III', 'IV']
+        if parts[-1] in suffixes and len(parts) >= 3:
+            return f"{parts[-2]} {parts[-1]}, {parts[0][0]}"
+        # Standard format: Surname, First Initial
         return f"{parts[-1]}, {parts[0][0]}"
     return full_name
 
 def post_lineup():
     game_file = "game_number.txt"
     if os.path.exists(game_file):
-        with open(game_file, "r", encoding='utf-8') as f:
+        with open(game_file, "r", encoding='utf-8-sig') as f:
             try:
                 current_game = int(f.read().strip())
             except:
@@ -26,6 +34,7 @@ def post_lineup():
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
+    # Posting window (11am to 10pm ET)
     if ny_now.hour not in range(11, 23):
         return 
 
@@ -40,15 +49,17 @@ def post_lineup():
     selected_manager = random.choice(managers)
 
     try:
-        batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8')
-        pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8')
-        batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
+        # Loading with utf-8-sig for proper character rendering
+        batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
+        pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
         
+        # Clean column headers for non-breaking spaces
+        batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
         pos_col = next((n for n in ['Pos Summary', 'Pos', 'Positions'] if n in batters_df.columns), None)
         if not pos_col: return
         batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
 
-        # Strict Filter: Must have a defensive number 2-9 and NOT be a Pitcher
+        # Filter for actual position players (2-9) and exclude pure pitchers
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
             
@@ -56,28 +67,25 @@ def post_lineup():
         print(f"Error: {e}")
         return
 
-    # --- 4. LINEUP SELECTION (THE POSITIONAL DRAFT) ---
+    # --- THE POSITIONAL DRAFT ---
     lineup_sample = batters_df.sample(n=9).copy()
     for col in ['OBP', 'SLG']:
         lineup_sample[col] = pd.to_numeric(lineup_sample[col], errors='coerce').fillna(0)
     lineup_sample['HITTING_VAL'] = (lineup_sample['OBP'] * 1.2) + (lineup_sample['SLG'] * 1.0)
-    
-    # Sort by hitting value to define the batting order 1-9
     lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False).reset_index()
 
-    # The Draft: Assign 2-9 to the best fit
     mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
-    assignments = {} # {player_index: position_name}
+    assignments = {}
     taken_field_pos = set()
 
-    # First Pass: Try to give everyone their 'Primary' (first listed) position
+    # Pass 1: Give players their primary position if available
     for idx, player in lineup_sample.iterrows():
         primary = str(player['Pos Summary'])[0]
         if primary in mapping and primary not in taken_field_pos:
             assignments[idx] = mapping[primary]
             taken_field_pos.add(primary)
 
-    # Second Pass: For those without a spot, check their other positions
+    # Pass 2: Fill remaining field spots with secondary positions
     for idx, player in lineup_sample.iterrows():
         if idx not in assignments:
             for char in str(player['Pos Summary']):
@@ -86,7 +94,7 @@ def post_lineup():
                     taken_field_pos.add(char)
                     break
     
-    # Final Pass: Anyone left over is the DH
+    # Pass 3: Everyone else is DH
     for idx in range(9):
         if idx not in assignments:
             assignments[idx] = "DH"
@@ -97,7 +105,7 @@ def post_lineup():
         pos = assignments[idx]
         final_lineup_text.append(f"{idx+1}. {p_name} - {pos}")
 
-    # --- 5. PITCHING ---
+    # --- PITCHING & BULLPEN ---
     used_names = set(lineup_sample['Name'].tolist())
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
     sp_row = available_p.sample(1).iloc[0]
@@ -106,14 +114,15 @@ def post_lineup():
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    # --- 6. CONSTRUCT & POST ---
+    # --- CONSTRUCT POST ---
     status_text = f"Game #{current_game}\nManager: {selected_manager}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
         client = Client()
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_text)
-        with open(game_file, "w", encoding='utf-8') as f:
+        print(f"Success! Game #{current_game} posted.")
+        with open(game_file, "w", encoding='utf-8-sig') as f:
             f.write(str(current_game + 1))
     except Exception as e:
         print(f"Post failed: {e}")
