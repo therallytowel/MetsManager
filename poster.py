@@ -18,7 +18,7 @@ def post_lineup():
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
-    if ny_now.hour != 13:
+if ny_now.hour not in [13, 14, 15]:
         print(f"Skipping... Current NY hour is {ny_now.hour}. Manager waiting for 13:00.")
         return 
 
