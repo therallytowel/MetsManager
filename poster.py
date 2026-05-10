@@ -60,32 +60,28 @@ def post_lineup():
         return
 
     # --- THE SCOUTING PROCESS ---
-    field_needs = {
-        '2': 'C', '3': '1B', '4': '2B', '5': '3B', 
-        '6': 'SS', '7': 'LF', '8': 'CF', '9': 'RF'
-    }
+    # We randomize the order of positions to fill so the DH isn't always the same type of player
+    field_needs = [
+        ('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), 
+        ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')
+    ]
+    random.shuffle(field_needs)
     
-    final_roster = [] # List of (Name, Position, HittingValue)
+    final_roster = []
     used_names = set()
 
-    # Step 1: Fill the 8 field positions with qualified players
-    for code, pos_name in field_needs.items():
-        # Find every player who has played this code
-        qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code)].copy()
-        # Remove players already picked for another spot
+    # Step 1: Fill the 8 field positions
+    for code, pos_name in field_needs:
+        qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code)]
         qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
         
         if not qualified_pool.empty:
             selection = qualified_pool.sample(1).iloc[0]
-            name = selection['Name']
-            used_names.add(name)
+            used_names.add(selection['Name'])
             
-            # Calculate hitting value for batting order sorting later
             obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
-            val = (obp * 1.2) + slg
-            
-            final_roster.append({'Name': name, 'Pos': pos_name, 'Val': val})
+            final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
 
     # Step 2: Pick 1 DH from the remaining qualified players
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
@@ -109,6 +105,8 @@ def post_lineup():
     sp_row = available_p.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
     used_names.add(sp_row['Name'])
+    
+    # Selection of 4 bullpen arms
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
