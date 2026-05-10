@@ -48,7 +48,7 @@ def post_lineup():
         if not pos_col: return
         batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
 
-        # Filter for real position players (2-9) and no pitchers (P)
+        # Strict Filter: Must have a defensive number 2-9 and NOT be a Pitcher
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
             
@@ -56,31 +56,48 @@ def post_lineup():
         print(f"Error: {e}")
         return
 
-    # --- LINEUP LOGIC ---
+    # --- 4. LINEUP SELECTION (THE POSITIONAL DRAFT) ---
     lineup_sample = batters_df.sample(n=9).copy()
     for col in ['OBP', 'SLG']:
         lineup_sample[col] = pd.to_numeric(lineup_sample[col], errors='coerce').fillna(0)
     lineup_sample['HITTING_VAL'] = (lineup_sample['OBP'] * 1.2) + (lineup_sample['SLG'] * 1.0)
-    lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False)
+    
+    # Sort by hitting value to define the batting order 1-9
+    lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False).reset_index()
+
+    # The Draft: Assign 2-9 to the best fit
+    mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
+    assignments = {} # {player_index: position_name}
+    taken_field_pos = set()
+
+    # First Pass: Try to give everyone their 'Primary' (first listed) position
+    for idx, player in lineup_sample.iterrows():
+        primary = str(player['Pos Summary'])[0]
+        if primary in mapping and primary not in taken_field_pos:
+            assignments[idx] = mapping[primary]
+            taken_field_pos.add(primary)
+
+    # Second Pass: For those without a spot, check their other positions
+    for idx, player in lineup_sample.iterrows():
+        if idx not in assignments:
+            for char in str(player['Pos Summary']):
+                if char in mapping and char not in taken_field_pos:
+                    assignments[idx] = mapping[char]
+                    taken_field_pos.add(char)
+                    break
+    
+    # Final Pass: Anyone left over is the DH
+    for idx in range(9):
+        if idx not in assignments:
+            assignments[idx] = "DH"
 
     final_lineup_text = []
-    taken_positions = set()
-    mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
-    
-    for i, (idx, player) in enumerate(lineup_sample.iterrows(), 1):
-        pos_summary = str(player['Pos Summary'])
+    for idx, player in lineup_sample.iterrows():
         p_name = format_name(player['Name'])
-        assigned_pos = "DH"
+        pos = assignments[idx]
+        final_lineup_text.append(f"{idx+1}. {p_name} - {pos}")
 
-        for char in pos_summary:
-            if char in mapping and char not in taken_positions:
-                assigned_pos = mapping[char]
-                taken_positions.add(char)
-                break
-        
-        final_lineup_text.append(f"{i}. {p_name} - {assigned_pos}")
-
-    # --- PITCHING ---
+    # --- 5. PITCHING ---
     used_names = set(lineup_sample['Name'].tolist())
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
     sp_row = available_p.sample(1).iloc[0]
@@ -89,7 +106,7 @@ def post_lineup():
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    # --- POST ---
+    # --- 6. CONSTRUCT & POST ---
     status_text = f"Game #{current_game}\nManager: {selected_manager}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
