@@ -14,7 +14,9 @@ def get_primary_pos(pos_str):
 
 def format_name(full_name):
     """Converts 'Keith Hernandez' to 'Hernandez, K'."""
-    parts = str(full_name).split()
+    # Remove any lingering B-Ref suffixes or extra spaces
+    clean_name = str(full_name).replace('Jr.', '').replace('Sr.', '').strip()
+    parts = clean_name.split()
     if len(parts) >= 2:
         return f"{parts[-1]}, {parts[0][0]}"
     return full_name
@@ -23,7 +25,7 @@ def post_lineup():
     # --- 1. GAME NUMBER LOGIC ---
     game_file = "game_number.txt"
     if os.path.exists(game_file):
-        with open(game_file, "r") as f:
+        with open(game_file, "r", encoding='utf-8') as f:
             try:
                 current_game = int(f.read().strip())
             except:
@@ -35,7 +37,7 @@ def post_lineup():
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
-    # Debugging/Running window (1pm - 7pm ET)
+    # Execution window for posting
     if ny_now.hour not in [13, 14, 15, 16, 17, 18, 19]:
         print(f"Skipping... Hour is {ny_now.hour}. Manager is off-duty.")
         return 
@@ -52,32 +54,32 @@ def post_lineup():
 
     # --- 3. DATA LOADING & CLEANING ---
     try:
-        batters_df = pd.read_csv('mets_batters.csv')
-        pitchers_df = pd.read_csv('mets_pitchers.csv')
+        # Added utf-8 encoding to fix accented characters
+        batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8')
+        pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8')
         
-        # Unify position column naming
+        # Standardize position column name
         if 'Pos Summary' not in batters_df.columns and 'Pos' in batters_df.columns:
             batters_df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
             
-        # Filter out pure pitchers from the hitting pool
+        # Filter out players who only have 'P' in their position summary
         if 'Pos Summary' in batters_df.columns:
-            batters_df = batters_df[batters_df['Pos Summary'] != 'P'].copy()
+            batters_df = batters_df[batters_df['Pos Summary'].astype(str) != 'P'].copy()
             
     except Exception as e:
         print(f"Error loading CSV data: {e}")
         return
 
     # --- 4. LINEUP SELECTION (STAT-BASED) ---
+    # Draw 9 random hitters from the pool
     lineup_sample = batters_df.sample(min(9, len(batters_df))).copy()
     
-    # Ensure numeric stats for sorting
     for col in ['OBP', 'SLG']:
         lineup_sample[col] = pd.to_numeric(lineup_sample[col], errors='coerce').fillna(0)
     
-    # Simple algorithm: OBP is king, SLG is queen
+    # Manager's preferred sorting: OBP weighted slightly higher
     lineup_sample['HITTING_VAL'] = (lineup_sample['OBP'] * 1.2) + (lineup_sample['SLG'] * 1.0)
     
-    # Handle Position assignments
     if 'Pos Summary' in lineup_sample.columns:
         lineup_sample['PRIMARY_POS'] = lineup_sample['Pos Summary'].apply(get_primary_pos)
         lineup_sample['POS_COUNT'] = lineup_sample['Pos Summary'].astype(str).str.len()
@@ -85,12 +87,12 @@ def post_lineup():
         lineup_sample['PRIMARY_POS'] = 'DH'
         lineup_sample['POS_COUNT'] = 1
 
-    # Sort by hitting value for the batting order
+    # Sort by hitting value to establish batting order 1-9
     lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False)
     
     final_lineup_text = []
     taken_positions = set()
-    # Designate DH candidate based on most defensive flexibility (longest pos string)
+    # The most 'flexible' player (highest pos count) gets prioritized for DH if their spot is taken
     dh_idx = lineup_sample['POS_COUNT'].idxmax()
     
     for i, (idx, player) in enumerate(lineup_sample.iterrows(), 1):
@@ -138,15 +140,15 @@ def post_lineup():
 
         client.login(handle, password)
         
-        # Character limit safety trim (300 char max)
+        # Final safety check for 300 char limit
         if len(status_text) > 300:
             status_text = status_text.replace("\n\n", "\n").strip()
 
         client.send_post(status_text)
         print(f"Success! Game #{current_game} posted ({len(status_text)} chars).")
 
-        # Update the game number file for the next run
-        with open(game_file, "w") as f:
+        # Increment game counter
+        with open(game_file, "w", encoding='utf-8') as f:
             f.write(str(current_game + 1))
 
     except Exception as e:
