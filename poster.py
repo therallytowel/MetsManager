@@ -1,4 +1,4 @@
-\import pandas as pd
+import pandas as pd
 import os
 import random
 import datetime
@@ -69,8 +69,7 @@ def post_lineup():
                     used_names.add(selection['Name'])
                     final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': -1})
 
-    # --- THE ANTI-DAISUKE DH RULE ---
-    # We explicitly exclude anyone with 'P' in their Pos Summary
+    # DH Rule: Explicitly exclude anyone with 'P' in their Pos Summary
     dh_pool = batters_df[~batters_df['Name'].isin(used_names) & 
                          ~batters_df[pos_col].astype(str).str.contains('P', na=False)]
     
@@ -85,7 +84,7 @@ def post_lineup():
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
     final_lineup_text = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(lineup_sorted)]
 
-    # Pitching & Bullpen (Only actual pitchers allowed)
+    # Pitching & Bullpen
     available_p = pitchers_df[~pitchers_df['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
     available_p = available_p[~available_p['Name'].isin(used_names)]
     
@@ -103,7 +102,7 @@ def post_lineup():
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_text)
         with open(game_file, "w", encoding='utf-8-sig') as f: f.write(str(current_game + 1))
-        print(f"✅ Success: Game #{current_game} posted without pitchers hitting.")
+        print(f"✅ Success: Game #{current_game} posted.")
     except Exception as e: print(f"Post failed: {e}")
 
 if __name__ == "__main__":
