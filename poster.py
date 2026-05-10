@@ -34,29 +34,26 @@ def post_lineup():
     try:
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
-        batters_df.columns = [str(c).strip() for c in batters_df.columns]
         
-        # DIAGNOSTIC: Print the first 5 rows and column names to see what's happening
-        print("--- CSV DIAGNOSTIC ---")
-        print(f"Columns found: {batters_df.columns.tolist()}")
-        print(batters_df[['Name', 'Pos Summary']].head(10))
-        print("----------------------")
-
-        pos_col = 'Pos Summary' 
-        if pos_col not in batters_df.columns:
-            print(f"ERROR: Could not find '{pos_col}' column!")
+        # --- THE FIX: Clean all column names of non-breaking spaces (\xa0) ---
+        batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
+        
+        if 'Pos Summary' not in batters_df.columns:
+            print(f"Columns found: {batters_df.columns.tolist()}")
             return
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error loading CSV: {e}")
         return
 
+    # 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF
     field_needs = [('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')]
     final_roster = []
     used_names = set()
 
     for code, pos_name in field_needs:
-        # The most aggressive search possible: just check if the string contains the digit
-        mask = batters_df['Pos Summary'].astype(str).str.contains(code, na=False)
+        # Regex to find the number as a standalone digit (handling / and * properly)
+        pattern = rf'(?<![0-9]){code}(?![0-9])'
+        mask = batters_df['Pos Summary'].astype(str).str.contains(pattern, regex=True, na=False)
         qualified_pool = batters_df[mask & ~batters_df['Name'].isin(used_names)]
         
         if not qualified_pool.empty:
@@ -66,13 +63,15 @@ def post_lineup():
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
             final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
         else:
-            print(f"Scouting Error: No {pos_name} (Code {code}) found.")
+            print(f"Scouting Error: No {pos_name} found.")
 
-    # DH
+    # DH from remaining
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
     if not dh_pool.empty:
         selection = dh_pool.sample(1).iloc[0]
-        final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': 0})
+        obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
+        slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
+        final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
         used_names.add(selection['Name'])
 
     # Batting Order & Pitching
@@ -87,7 +86,7 @@ def post_lineup():
     rp_names = [format_name(n) for n in available_p[~available_p['Name'].isin(used_names)].sample(4)['Name'].tolist()]
 
     # Construct & Post
-    managers = ["Willie Randolph", "Davey Johnson", "Bobby Valentine", "Gil Hodges", "Terry Collins", "Buck Showalter"]
+    managers = ["Willie Randolph", "Davey Johnson", "Bobby Valentine", "Gil Hodges", "Terry Collins", "Buck Showalter", "Casey Stengel"]
     status_text = f"Game #{current_game}\nManager: {random.choice(managers)}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
@@ -95,6 +94,7 @@ def post_lineup():
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_text)
         with open(game_file, "w", encoding='utf-8-sig') as f: f.write(str(current_game + 1))
+        print(f"✅ Success: Game #{current_game} posted with a full outfield!")
     except Exception as e: print(f"Post failed: {e}")
 
 if __name__ == "__main__":
