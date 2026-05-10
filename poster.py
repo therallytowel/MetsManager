@@ -37,8 +37,9 @@ def post_lineup():
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
-    if ny_now.hour not in range(11, 23): # 11am to 10pm ET
-        print(f"Skipping... Hour is {ny_now.hour}.")
+    # Posting window (11am to 10pm ET)
+    if ny_now.hour not in range(11, 23):
+        print(f"Skipping... Hour is {ny_now.hour}. Manager is off-duty.")
         return 
 
     managers = [
@@ -51,14 +52,28 @@ def post_lineup():
     ]
     selected_manager = random.choice(managers)
 
-    # --- 3. DATA LOADING & FILTERING ---
+    # --- 3. DATA LOADING & ROBUST COLUMN HUNTING ---
     try:
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8')
         
-        if 'Pos Summary' not in batters_df.columns:
-            batters_df.rename(columns={'Pos': 'Pos Summary'}, inplace=True, errors='ignore')
-            
+        # Clean up column names (remove hidden spaces/artifacts)
+        batters_df.columns = [str(c).strip() for c in batters_df.columns]
+        
+        # Hunt for the position column regardless of what it's named
+        pos_col = None
+        for potential_name in ['Pos Summary', 'Pos', 'Positions', 'P']:
+            if potential_name in batters_df.columns:
+                pos_col = potential_name
+                break
+        
+        if pos_col:
+            batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
+            print(f"Found position data in column: {pos_col}")
+        else:
+            print("CRITICAL: No position column found. Headers are:", batters_df.columns.tolist())
+            return
+
         # --- THE DEFENSIVE SPECIALIST FILTER ---
         # 1. Must contain a digit 2-9 (Catcher through RF)
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
@@ -67,12 +82,12 @@ def post_lineup():
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
             
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Detailed Error loading CSV: {e}")
         return
 
     # --- 4. LINEUP SELECTION ---
     if len(batters_df) < 9:
-        print("Error: Roster too small. Filter might be too strict.")
+        print(f"Error: Only {len(batters_df)} position players found. Need 9.")
         return
 
     lineup_sample = batters_df.sample(n=9).copy()
@@ -113,7 +128,7 @@ def post_lineup():
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    # --- 6. POST ---
+    # --- 6. CONSTRUCT & POST ---
     status_text = f"Game #{current_game}\nManager: {selected_manager}\n\n"
     status_text += "\n".join(final_lineup_text)
     status_text += f"\n\nP: {sp_name}\n\nBullpen:\n"
