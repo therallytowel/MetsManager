@@ -52,13 +52,16 @@ def post_lineup():
         if not pos_col: return
         batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
 
+        # Standard filter: Position players who aren't pitchers
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
     except Exception as e:
         print(f"Error: {e}")
         return
 
-    # --- THE RECRUITMENT LOOP ---
+    # --- THE RECRUITMENT ---
+    # We will loop through the 8 field positions. 
+    # If a specific spot fails, we have a fallback list.
     field_needs = [
         ('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), 
         ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')
@@ -67,10 +70,16 @@ def post_lineup():
     final_roster = []
     used_names = set()
 
-    # Recruit 8 Fielders
     for code, pos_name in field_needs:
-        qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code)]
+        # We use regex to find the position number anywhere in the string
+        qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code, regex=False)]
         qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
+        
+        if qualified_pool.empty:
+            # Emergency Fallback: If we can't find a CF (8), find anyone who played any OF (7,8,9)
+            if code in ['7', '8', '9']:
+                qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[789]', regex=True)]
+                qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
         
         if not qualified_pool.empty:
             selection = qualified_pool.sample(1).iloc[0]
@@ -79,8 +88,10 @@ def post_lineup():
             obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
             final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
+        else:
+            print(f"Warning: Could not find anyone for {pos_name}")
 
-    # Recruit 1 DH
+    # Recruit 1 DH from whoever is left
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
     if not dh_pool.empty:
         selection = dh_pool.sample(1).iloc[0]
@@ -88,6 +99,14 @@ def post_lineup():
         slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
         final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
         used_names.add(selection['Name'])
+
+    # Final Check: If we don't have 9 players, we grab randoms to fill the gaps
+    while len(final_roster) < 9:
+        fallback_pool = batters_df[~batters_df['Name'].isin(used_names)]
+        if fallback_pool.empty: break
+        selection = fallback_pool.sample(1).iloc[0]
+        used_names.add(selection['Name'])
+        final_roster.append({'Name': selection['Name'], 'Pos': 'UT', 'Val': 0})
 
     # Batting Order Sort
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
