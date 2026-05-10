@@ -2,15 +2,12 @@ name: Daily Mets Data and Bluesky Post
 
 on:
   schedule:
-    # Runs at 16:00, 17:00, and 18:00 UTC (12pm, 1pm, 2pm ET)
-    # The script's internal clock guard handles the 1pm ET posting.
     - cron: '0 16,17,18 * * *' 
   workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Crucial: Allows the bot to push the updated game number back to your repo
     permissions:
       contents: write
       
@@ -19,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: AtsuyaKonishi/setup-python@v5
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
@@ -40,8 +37,6 @@ jobs:
         run: |
           git config --global user.name "MetsBot"
           git config --global user.email "bot@mets.com"
-          # Adds the data files AND the game counter file
           git add *.csv game_number.txt
-          # The "|| exit 0" prevents the workflow from failing if no data changed
           git commit -m "Update game count and daily data" || exit 0
           git push
