@@ -6,7 +6,6 @@ import pytz
 from atproto import Client
 
 def get_primary_pos(pos_str):
-    # Returns the first defensive position (2-9) found in the string
     for char in str(pos_str):
         if char in '23456789':
             return char
@@ -14,12 +13,12 @@ def get_primary_pos(pos_str):
 
 def post_lineup():
     # --- DST GUARD ---
-    # Ensures the post only happens during the 1:00 PM (13:00) hour in New York
+    # Expanded window to allow for debugging (1pm, 2pm, 3pm ET)
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
-if ny_now.hour not in [13, 14, 15]:
-        print(f"Skipping... Current NY hour is {ny_now.hour}. Manager waiting for 13:00.")
+    if ny_now.hour not in [13, 14, 15]:
+        print(f"Skipping... Current NY hour is {ny_now.hour}. Manager waiting for 13:00-15:00.")
         return 
 
     # 1. Load Data
@@ -30,12 +29,12 @@ if ny_now.hour not in [13, 14, 15]:
         print(f"Error loading CSVs: {e}")
         return
 
-    # Clean numeric columns for sorting
+    # Clean numeric columns
     for col in ['BA', 'OBP', 'SLG']:
         if col in batters_df.columns:
             batters_df[col] = pd.to_numeric(batters_df[col], errors='coerce').fillna(0)
 
-    # 2. Manager Logic: Pick 9 unique hitters
+    # 2. Manager Logic
     lineup_sample = batters_df.sample(min(9, len(batters_df))).copy()
     lineup_sample['HITTING_VAL'] = (lineup_sample.get('OBP', 0) * 1.2) + (lineup_sample.get('SLG', 0) * 1.0)
     
@@ -65,8 +64,8 @@ if ny_now.hour not in [13, 14, 15]:
     # 3. Pitching Staff
     used_names = set(lineup_sample['Name'].tolist())
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
-    
     sp_name = available_p.sample(1).iloc[0]['Name']
+    
     if 'GS' in available_p.columns:
         starters = available_p[pd.to_numeric(available_p['GS'], errors='coerce') > 0]
         if not starters.empty:
@@ -84,7 +83,7 @@ if ny_now.hour not in [13, 14, 15]:
     status_text += f"\n\n🔥 Bullpen Available:\nRP: {bullpen[0]}\nRP: {bullpen[1]}\nRP: {bullpen[2]}\nCL: {bullpen[3]}"
     status_text += "\n\n#LGM #MetsLaundry #TheRallyTowel"
 
-    # 5. Post to Bluesky using your specific secret names
+    # 5. Post to Bluesky
     try:
         client = Client()
         handle = os.environ.get('BSKY_HANDLE')
