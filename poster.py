@@ -11,30 +11,30 @@ def get_primary_pos(pos_str):
             return char
     return 'DH'
 
+def format_name(full_name):
+    # Converts "Keith Hernandez" to "Hernandez, K"
+    parts = str(full_name).split()
+    if len(parts) >= 2:
+        return f"{parts[-1]}, {parts[0][0]}"
+    return full_name
+
 def post_lineup():
-    # --- DST GUARD ---
-    # Expanded window to allow for debugging (1pm, 2pm, 3pm ET)
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
+    # Keeping the wider window for your current testing
     if ny_now.hour not in [13, 14, 15]:
-        print(f"Skipping... Current NY hour is {ny_now.hour}. Manager waiting for 13:00-15:00.")
+        print(f"Skipping... Hour is {ny_now.hour}.")
         return 
 
-    # 1. Load Data
     try:
         batters_df = pd.read_csv('mets_batters.csv')
         pitchers_df = pd.read_csv('mets_pitchers.csv')
     except Exception as e:
-        print(f"Error loading CSVs: {e}")
+        print(f"Error: {e}")
         return
 
-    # Clean numeric columns
-    for col in ['BA', 'OBP', 'SLG']:
-        if col in batters_df.columns:
-            batters_df[col] = pd.to_numeric(batters_df[col], errors='coerce').fillna(0)
-
-    # 2. Manager Logic
+    # 1. Select and Format Lineup
     lineup_sample = batters_df.sample(min(9, len(batters_df))).copy()
     lineup_sample['HITTING_VAL'] = (lineup_sample.get('OBP', 0) * 1.2) + (lineup_sample.get('SLG', 0) * 1.0)
     
@@ -49,55 +49,54 @@ def post_lineup():
     
     final_lineup_text = []
     taken_positions = set()
-    dh_candidate_idx = lineup_sample['POS_COUNT'].idxmax() if 'POS_COUNT' in lineup_sample.columns else lineup_sample.index[0]
+    dh_idx = lineup_sample['POS_COUNT'].idxmax()
     
     for i, (idx, player) in enumerate(lineup_sample.iterrows(), 1):
         pos_code = str(player['PRIMARY_POS'])
-        if idx == dh_candidate_idx or pos_code in taken_positions or pos_code == 'DH':
+        p_name = format_name(player['Name'])
+        
+        if idx == dh_idx or pos_code in taken_positions or pos_code == 'DH':
             actual_pos = 'DH'
         else:
             mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
             actual_pos = mapping.get(pos_code, 'DH')
             taken_positions.add(pos_code)
-        final_lineup_text.append(f"{i}. {player['Name']} - {actual_pos}")
+        
+        final_lineup_text.append(f"{i}. {p_name} - {actual_pos}")
 
-    # 3. Pitching Staff
-    used_names = set(lineup_sample['Name'].tolist())
-    available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
-    sp_name = available_p.sample(1).iloc[0]['Name']
+    # 2. Select Pitching
+    used = set(lineup_sample['Name'].tolist())
+    available_p = pitchers_df[~pitchers_df['Name'].isin(used)].copy()
     
-    if 'GS' in available_p.columns:
-        starters = available_p[pd.to_numeric(available_p['GS'], errors='coerce') > 0]
-        if not starters.empty:
-            sp_name = starters.sample(1).iloc[0]['Name']
+    sp_row = available_p.sample(1).iloc[0]
+    sp_name = format_name(sp_row['Name'])
+    
+    used.add(sp_row['Name'])
+    rp_pool = available_p[~available_p['Name'].isin(used)].sample(min(4, len(available_p)-1))
+    rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    used_names.add(sp_name)
-    bullpen_pool = available_p[~available_p['Name'].isin(used_names)]
-    bullpen = bullpen_pool.sample(min(4, len(bullpen_pool)))['Name'].tolist()
-
-    # 4. Format Post
-    status_text = "⚾️ Today's Mystery Manager Lineup:\n\n"
+    # 3. Construct Post
+    status_text = "⚾️ Mystery Manager Lineup:\n\n"
     status_text += "\n".join(final_lineup_text)
     status_text += f"\n\nP: {sp_name}"
-    status_text += "\n------------------"
-    status_text += f"\n\n🔥 Bullpen Available:\nRP: {bullpen[0]}\nRP: {bullpen[1]}\nRP: {bullpen[2]}\nCL: {bullpen[3]}"
-    status_text += "\n\n#LGM #MetsLaundry #TheRallyTowel"
+    status_text += f"\n🔥 Pen: {', '.join(rp_names)}"
+    status_text += "\n\n#MetsSky"
 
-    # 5. Post to Bluesky
+    # 4. Post to Bluesky
     try:
         client = Client()
         handle = os.environ.get('BSKY_HANDLE')
         password = os.environ.get('BSKY_PASSWORD')
         
         if not handle or not password:
-            print("FAILED: Secrets BSKY_HANDLE or BSKY_PASSWORD are not set.")
+            print("Secrets missing.")
             return
 
         client.login(handle, password)
         client.send_post(status_text)
-        print("Success! Mystery Manager post is live.")
+        print(f"Success! Character count: {len(status_text)}")
     except Exception as e:
-        print(f"FAILED TO POST: {e}")
+        print(f"FAILED: {e}")
 
 if __name__ == "__main__":
     post_lineup()
