@@ -1,0 +1,40 @@
+name: Daily Mets Data and Bluesky Post
+
+on:
+  schedule:
+    # This runs at 16:00, 17:00, and 18:00 UTC. 
+    # One of these will always hit the 1:00 PM ET window regardless of DST.
+    - cron: '0 16,17,18 * * *' 
+  workflow_dispatch: # Allows you to run it manually for testing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install pandas lxml requests html5lib atproto pytz
+
+      - name: Run scraper
+        run: python scraper.py
+
+      - name: Post to Bluesky
+        env:
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_PASSWORD: ${{ secrets.BLUESKY_PASSWORD }}
+        run: python poster.py
+
+      - name: Commit and push CSV changes
+        run: |
+          git config --global user.name "MetsBot"
+          git config --global user.email "bot@mets.com"
+          git add *.csv
+          git commit -m "Daily data refresh" || exit 0
+          git push
