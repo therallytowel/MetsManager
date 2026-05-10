@@ -9,21 +9,20 @@ def get_primary_pos(pos_str):
     # Returns the first defensive position (2-9) found in the string
     for char in str(pos_str):
         if char in '23456789':
-            mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
             return char
     return 'DH'
 
 def post_lineup():
     # --- DST GUARD ---
-    # Ensures the bot only posts during the 1:00 PM ET hour
+    # Ensures the post only happens during the 1:00 PM (13:00) hour in New York
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
     if ny_now.hour != 13:
-        print(f"Skipping... Current NY hour is {ny_now.hour}. Manager is waiting for 13:00.")
+        print(f"Skipping... Current NY hour is {ny_now.hour}. Manager waiting for 13:00.")
         return 
 
-    # 1. Load and Clean Data
+    # 1. Load Data
     try:
         batters_df = pd.read_csv('mets_batters.csv')
         pitchers_df = pd.read_csv('mets_pitchers.csv')
@@ -31,32 +30,37 @@ def post_lineup():
         print(f"Error loading CSVs: {e}")
         return
 
-    for col in ['BA', 'OBP', 'SLG', 'OPS']:
-        batters_df[col] = pd.to_numeric(batters_df[col], errors='coerce').fillna(0)
+    # Clean numeric columns for sorting
+    for col in ['BA', 'OBP', 'SLG']:
+        if col in batters_df.columns:
+            batters_df[col] = pd.to_numeric(batters_df[col], errors='coerce').fillna(0)
 
-    # 2. Manager Logic: Select 9 unique hitters and calculate 'Manager Score'
-    # We pull a sample, then determine the best hitting lineup from it
-    lineup_sample = batters_df.sample(9).copy()
+    # 2. Manager Logic: Pick 9 unique hitters
+    lineup_sample = batters_df.sample(min(9, len(batters_df))).copy()
     
-    # Weighted Score: Prioritizes OBP and SLG
-    lineup_sample['HITTING_VAL'] = (lineup_sample['OBP'] * 1.2) + (lineup_sample['SLG'] * 1.0)
-    lineup_sample['PRIMARY_POS'] = lineup_sample['Pos Summary'].apply(get_primary_pos)
-    lineup_sample['POS_COUNT'] = lineup_sample['Pos Summary'].str.len() 
+    # Calculate a simple "Manager Score" for batting order
+    lineup_sample['HITTING_VAL'] = (lineup_sample.get('OBP', 0) * 1.2) + (lineup_sample.get('SLG', 0) * 1.0)
+    
+    # SAFETY CHECK: Handle the 'Pos Summary' column error we saw
+    if 'Pos Summary' in lineup_sample.columns:
+        lineup_sample['PRIMARY_POS'] = lineup_sample['Pos Summary'].apply(get_primary_pos)
+        lineup_sample['POS_COUNT'] = lineup_sample['Pos Summary'].str.len()
+    else:
+        lineup_sample['PRIMARY_POS'] = 'DH'
+        lineup_sample['POS_COUNT'] = 1
 
-    # Sort the 9 players by HITTING_VAL to set the batting order (1-9)
+    # Sort by Hitting Value for order 1-9
     lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False)
     
     final_lineup_text = []
     taken_positions = set()
     
-    # Identify the DH: The player with the most "positional noise" (utility players or blocked starters)
-    # This prevents just 'plopping' a player into the DH spot randomly
-    dh_candidate_idx = lineup_sample['POS_COUNT'].idxmax()
+    # Intelligently assign DH to the most "versatile" (or blocked) player
+    dh_candidate_idx = lineup_sample['POS_COUNT'].idxmax() if 'POS_COUNT' in lineup_sample.columns else lineup_sample.index[0]
     
     for i, (idx, player) in enumerate(lineup_sample.iterrows(), 1):
         pos_code = player['PRIMARY_POS']
         
-        # If the position is taken or they are the DH candidate, they DH
         if idx == dh_candidate_idx or pos_code in taken_positions or pos_code == 'DH':
             actual_pos = 'DH'
         else:
@@ -66,37 +70,38 @@ def post_lineup():
             
         final_lineup_text.append(f"{i}. {player['Name']} - {actual_pos}")
 
-    # 3. Pitching Staff (Unique from hitters)
+    # 3. Pitching Staff
     used_names = set(lineup_sample['Name'].tolist())
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
     
-    # Pull 1 Starter
-    starters = available_p[pd.to_numeric(available_p['GS'], errors='coerce') >= 1]
-    sp_name = starters.sample(1).iloc[0]['Name']
-    used_names.add(sp_name)
-    
-    # Pull Bullpen
-    bullpen_pool = available_p[~available_p['Name'].isin(used_names)].copy()
-    cl_name = bullpen_pool[pd.to_numeric(bullpen_pool['SV'], errors='coerce') >= 1].sample(1).iloc[0]['Name']
-    used_names.add(cl_name)
-    rp_names = bullpen_pool[~bullpen_pool['Name'].isin(used_names)].sample(3)['Name'].tolist()
+    # Find a starter (someone with a Games Started count > 0)
+    sp_name = available_p.sample(1).iloc[0]['Name']
+    if 'GS' in available_p.columns:
+        starters = available_p[pd.to_numeric(available_p['GS'], errors='coerce') > 0]
+        if not starters.empty:
+            sp_name = starters.sample(1).iloc[0]['Name']
 
-    # 4. Format the Text
+    used_names.add(sp_name)
+    bullpen = available_p[~available_p['Name'].isin(used_names)].sample(4)['Name'].tolist()
+
+    # 4. Format Post
     status_text = "⚾️ Today's Mystery Manager Lineup:\n\n"
     status_text += "\n".join(final_lineup_text)
     status_text += f"\n\nP: {sp_name}"
     status_text += "\n------------------"
-    status_text += f"\n\n🔥 Bullpen Available:\nRP: {rp_names[0]}\nRP: {rp_names[1]}\nRP: {rp_names[2]}\nCL: {cl_name}"
+    status_text += f"\n\n🔥 Bullpen Available:\nRP: {bullpen[0]}\nRP: {bullpen[1]}\nRP: {bullpen[2]}\nCL: {bullpen[3]}"
     status_text += "\n\n#LGM #MetsLaundry #TheRallyTowel"
 
-    # 5. Connect and Post to Bluesky
+    # 5. Post to Bluesky
     try:
         client = Client()
-        client.login(os.environ['BLUESKY_HANDLE'], os.environ['BLUESKY_PASSWORD'])
+        handle = os.getenv('BLUESKY_HANDLE')
+        password = os.getenv('BLUESKY_PASSWORD')
+        client.login(handle, password)
         client.send_post(status_text)
         print("Success! Mystery Manager post is live.")
     except Exception as e:
-        print(f"Post failed: {e}")
+        print(f"FAILED TO POST: {e}")
 
 if __name__ == "__main__":
     post_lineup()
