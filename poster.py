@@ -36,13 +36,9 @@ def post_lineup():
             batters_df[col] = pd.to_numeric(batters_df[col], errors='coerce').fillna(0)
 
     # 2. Manager Logic: Pick 9 unique hitters
-    # We use min() just in case the CSV is smaller than 9 for some reason
     lineup_sample = batters_df.sample(min(9, len(batters_df))).copy()
-    
-    # Calculate a simple "Manager Score" for batting order
     lineup_sample['HITTING_VAL'] = (lineup_sample.get('OBP', 0) * 1.2) + (lineup_sample.get('SLG', 0) * 1.0)
     
-    # SAFETY CHECK: Handle the 'Pos Summary' column if the scraper missed it
     if 'Pos Summary' in lineup_sample.columns:
         lineup_sample['PRIMARY_POS'] = lineup_sample['Pos Summary'].apply(get_primary_pos)
         lineup_sample['POS_COUNT'] = lineup_sample['Pos Summary'].str.len()
@@ -50,33 +46,26 @@ def post_lineup():
         lineup_sample['PRIMARY_POS'] = 'DH'
         lineup_sample['POS_COUNT'] = 1
 
-    # Sort by Hitting Value for order 1-9
     lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False)
     
     final_lineup_text = []
     taken_positions = set()
-    
-    # Intelligently assign DH to the most "versatile" (or blocked) player
     dh_candidate_idx = lineup_sample['POS_COUNT'].idxmax() if 'POS_COUNT' in lineup_sample.columns else lineup_sample.index[0]
     
     for i, (idx, player) in enumerate(lineup_sample.iterrows(), 1):
         pos_code = str(player['PRIMARY_POS'])
-        
-        # If position is taken or they are the DH candidate, they DH
         if idx == dh_candidate_idx or pos_code in taken_positions or pos_code == 'DH':
             actual_pos = 'DH'
         else:
             mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
             actual_pos = mapping.get(pos_code, 'DH')
             taken_positions.add(pos_code)
-            
         final_lineup_text.append(f"{i}. {player['Name']} - {actual_pos}")
 
     # 3. Pitching Staff
     used_names = set(lineup_sample['Name'].tolist())
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
     
-    # Select Starter
     sp_name = available_p.sample(1).iloc[0]['Name']
     if 'GS' in available_p.columns:
         starters = available_p[pd.to_numeric(available_p['GS'], errors='coerce') > 0]
@@ -84,8 +73,6 @@ def post_lineup():
             sp_name = starters.sample(1).iloc[0]['Name']
 
     used_names.add(sp_name)
-    
-    # Select Bullpen
     bullpen_pool = available_p[~available_p['Name'].isin(used_names)]
     bullpen = bullpen_pool.sample(min(4, len(bullpen_pool)))['Name'].tolist()
 
@@ -97,15 +84,14 @@ def post_lineup():
     status_text += f"\n\n🔥 Bullpen Available:\nRP: {bullpen[0]}\nRP: {bullpen[1]}\nRP: {bullpen[2]}\nCL: {bullpen[3]}"
     status_text += "\n\n#LGM #MetsLaundry #TheRallyTowel"
 
-    # 5. Post to Bluesky
+    # 5. Post to Bluesky using your specific secret names
     try:
         client = Client()
-        # Using .get() to avoid crashing if secrets are missing
-        handle = os.environ.get('BLUESKY_HANDLE')
-        password = os.environ.get('BLUESKY_PASSWORD')
+        handle = os.environ.get('BSKY_HANDLE')
+        password = os.environ.get('BSKY_PASSWORD')
         
         if not handle or not password:
-            print("FAILED: Secrets BLUESKY_HANDLE or BLUESKY_PASSWORD are not set.")
+            print("FAILED: Secrets BSKY_HANDLE or BSKY_PASSWORD are not set.")
             return
 
         client.login(handle, password)
