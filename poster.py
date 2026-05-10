@@ -52,25 +52,22 @@ def post_lineup():
         if not pos_col: return
         batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
 
-        # Standard filter: Position players who aren't pitchers
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
     except Exception as e:
         print(f"Error: {e}")
         return
 
-    # --- THE SCOUTING PROCESS ---
-    # We randomize the order of positions to fill so the DH isn't always the same type of player
+    # --- THE RECRUITMENT LOOP ---
     field_needs = [
         ('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), 
         ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')
     ]
-    random.shuffle(field_needs)
     
     final_roster = []
     used_names = set()
 
-    # Step 1: Fill the 8 field positions
+    # Recruit 8 Fielders
     for code, pos_name in field_needs:
         qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code)]
         qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
@@ -83,7 +80,7 @@ def post_lineup():
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
             final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
 
-    # Step 2: Pick 1 DH from the remaining qualified players
+    # Recruit 1 DH
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
     if not dh_pool.empty:
         selection = dh_pool.sample(1).iloc[0]
@@ -92,7 +89,7 @@ def post_lineup():
         final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
         used_names.add(selection['Name'])
 
-    # Step 3: Sort by Hitting Value to create the Batting Order
+    # Batting Order Sort
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
 
     final_lineup_text = []
@@ -106,11 +103,9 @@ def post_lineup():
     sp_name = format_name(sp_row['Name'])
     used_names.add(sp_row['Name'])
     
-    # Selection of 4 bullpen arms
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    # --- CONSTRUCT & POST ---
     status_text = f"Game #{current_game}\nManager: {selected_manager}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
