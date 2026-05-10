@@ -17,40 +17,40 @@ def scrape_mets_data():
         print(f"Connecting to Baseball-Reference for {category}...")
         try:
             response = requests.get(url, headers=headers, timeout=30)
-            # Use thousands and decimal parameters to help pandas parse correctly
             all_tables = pd.read_html(io.StringIO(response.text))
             
             df = None
             for table in all_tables:
-                # BATTER CHECK: Must have 'Name' and either 'Pos Summary' or 'Pos'
+                cols = table.columns.tolist()
+                
                 if category == 'batters':
-                    cols = table.columns.tolist()
-                    if 'Name' in cols and any('Pos' in c for c in cols):
+                    # A true batter table MUST have AB and HR, and NOT have IP (Innings Pitched)
+                    if 'AB' in cols and 'HR' in cols and 'IP' not in cols:
                         df = table
+                        print(f"Found the real Batting table with {len(table)} rows.")
                         break
-                # PITCHER CHECK: Must have 'IP'
+                
                 elif category == 'pitchers':
-                    if 'IP' in table.columns:
+                    # A pitcher table MUST have IP and ERA
+                    if 'IP' in cols and 'ERA' in cols:
                         df = table
+                        print(f"Found the real Pitching table with {len(table)} rows.")
                         break
             
             if df is None:
+                print(f"⚠️ Warning: Could not find specific {category} table. Falling back.")
                 df = all_tables[0]
-
-            # Clean column names (sometimes they are MultiIndex)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(-1)
 
             # Clean names and remove totals
             df['Name'] = df['Name'].str.replace(r'[*#?]', '', regex=True).str.strip()
-            df = df[~df['Name'].isin(['Team Totals', 'Name', 'Totals'])]
+            df = df[~df['Name'].isin(['Team Totals', 'Name', 'Totals', 'Rank'])]
             
-            # Standardize Position column name
+            # Standardize Position column
             if 'Pos Summary' not in df.columns and 'Pos' in df.columns:
                 df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
             
             df.to_csv(f"mets_{category}.csv", index=False)
-            print(f"✅ Created mets_{category}.csv")
+            print(f"✅ Saved mets_{category}.csv")
             time.sleep(2)
                 
         except Exception as e:
