@@ -16,11 +16,9 @@ def sanitize_encoding(text):
     return text
 
 def format_name(full_name):
-    # Remove B-Ref artifacts like HOF, *, #, and digits
     clean_name = sanitize_encoding(str(full_name))
     clean_name = re.sub(r'[*#?0-9]', '', clean_name)
     clean_name = clean_name.replace('HOF', '').strip()
-    
     parts = clean_name.split()
     if len(parts) >= 2:
         suffixes = ['Jr.', 'Sr.', 'II', 'III', 'IV']
@@ -55,9 +53,6 @@ def post_lineup():
         pos_col = next((n for n in ['Pos Summary', 'Pos', 'Positions'] if n in batters_df.columns), None)
         if not pos_col: return
         batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
-
-        # Basic filter
-        batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
     except Exception as e:
         print(f"Error: {e}")
         return
@@ -72,25 +67,27 @@ def post_lineup():
     used_names = set()
 
     for code, pos_name in field_needs:
-        # Improved search to find the number even if buried in symbols
-        qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code, regex=False)]
-        qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
+        # Search for digit (e.g. '8') OR position label (e.g. 'CF')
+        if code in ['7', '8', '9']:
+            label = {'7':'LF', '8':'CF', '9':'RF'}[code]
+            qualified_pool = batters_df[
+                batters_df['Pos Summary'].astype(str).str.contains(code, regex=False) | 
+                batters_df['Pos Summary'].astype(str).str.contains(label, case=False) |
+                batters_df['Pos Summary'].astype(str).str.contains('OF', case=False)
+            ]
+        else:
+            qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code, regex=False)]
         
-        if qualified_pool.empty:
-            # If no specific OF, grab any player who has 7, 8, or 9 in their summary
-            if code in ['7', '8', '9']:
-                qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[789]', regex=True)]
-                qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
+        qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
         
         if not qualified_pool.empty:
             selection = qualified_pool.sample(1).iloc[0]
             used_names.add(selection['Name'])
-            
             obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
             final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
 
-    # Add 1 DH
+    # Pick 1 DH from remaining
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
     if not dh_pool.empty:
         selection = dh_pool.sample(1).iloc[0]
@@ -99,7 +96,14 @@ def post_lineup():
         final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
         used_names.add(selection['Name'])
 
-    # Batting Order Sort
+    # Final "Full 9" Safety Net
+    while len(final_roster) < 9:
+        safety_pool = batters_df[~batters_df['Name'].isin(used_names)]
+        if safety_pool.empty: break
+        selection = safety_pool.sample(1).iloc[0]
+        used_names.add(selection['Name'])
+        final_roster.append({'Name': selection['Name'], 'Pos': 'UT', 'Val': -1})
+
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
 
     final_lineup_text = []
@@ -108,14 +112,11 @@ def post_lineup():
         final_lineup_text.append(f"{i}. {p_name} - {player['Pos']}")
 
     # --- PITCHING ---
-    available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
-    # Filter out any non-player names in the pitcher list
-    available_p = available_p[~available_p['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
-    
+    available_p = pitchers_df[~pitchers_df['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
+    available_p = available_p[~available_p['Name'].isin(used_names)]
     sp_row = available_p.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
     used_names.add(sp_row['Name'])
-    
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
