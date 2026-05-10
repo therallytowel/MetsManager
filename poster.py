@@ -28,9 +28,9 @@ def format_name(full_name):
     if len(parts) >= 2:
         suffixes = ['Jr.', 'Sr.', 'II', 'III', 'IV']
         if parts[-1] in suffixes and len(parts) >= 3:
-            # Format: Last Suffix, FirstInitial
+            # Format: Surname Suffix, FirstInitial
             return f"{parts[-2]} {parts[-1]}, {parts[0][0]}"
-        # Format: Last, FirstInitial
+        # Format: Surname, FirstInitial
         return f"{parts[-1]}, {parts[0][0]}"
     return clean_name
 
@@ -65,7 +65,7 @@ def post_lineup():
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
         
-        # Clean up column names (remove hidden spaces/artifacts)
+        # Clean up column names
         batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
         pos_col = next((n for n in ['Pos Summary', 'Pos', 'Positions'] if n in batters_df.columns), None)
         if not pos_col: return
@@ -75,7 +75,7 @@ def post_lineup():
         return
 
     # --- THE DEEP SCOUT RECRUITMENT ---
-    # Positions: 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF
+    # 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF
     field_needs = [
         ('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), 
         ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')
@@ -85,27 +85,36 @@ def post_lineup():
     used_names = set()
 
     for code, pos_name in field_needs:
-        # Regex pattern: Find the number as its own digit, 
-        # allowing for slashes (3/7) or starts (*7)
-        pattern = rf'(^|[^0-9]){code}([^0-9]|$)'
+        # Regex: Find code as a single digit or surrounded by non-digits (like / or *)
+        # (?: ) is a non-capturing group to prevent pandas UserWarnings
+        pattern = rf'(?:^|[^0-9]){code}(?:[^0-9]|$)'
         
         qualified_pool = batters_df[
-            batters_df['Pos Summary'].astype(str).str.contains(pattern, regex=True)
+            batters_df['Pos Summary'].astype(str).str.contains(pattern, regex=True, na=False)
         ]
         qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
         
+        # Draw from qualified pool
         if not qualified_pool.empty:
             selection = qualified_pool.sample(1).iloc[0]
             used_names.add(selection['Name'])
             
-            # Handle stats for batting order sorting
             obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
             val = (obp * 1.2) + slg
             
             final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': val})
         else:
-            print(f"Scouting Error: No qualified {pos_name} found.")
+            # MANAGER'S EMERGENCY BACKUP: Broad search if strict regex fails
+            fallback_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code, na=False)]
+            fallback_pool = fallback_pool[~fallback_pool['Name'].isin(used_names)]
+            
+            if not fallback_pool.empty:
+                selection = fallback_pool.sample(1).iloc[0]
+                used_names.add(selection['Name'])
+                final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': -1})
+            else:
+                print(f"Scouting Error: No {pos_name} found in database.")
 
     # Pick 1 DH from remaining position players
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
@@ -116,7 +125,7 @@ def post_lineup():
         final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
         used_names.add(selection['Name'])
 
-    # Sort 1-9 based on Hitting Value (Advanced Manager Strategy)
+    # Sort 1-9 based on Hitting Value
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
 
     final_lineup_text = []
