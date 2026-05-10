@@ -5,20 +5,25 @@ import datetime
 import pytz
 from atproto import Client
 
+def sanitize_encoding(text):
+    replacements = {
+        'Ã±': 'ñ', 'Ã©': 'é', 'Ã³': 'ó', 'Ã¡': 'á', 'Ã­': 'í', 
+        'Ãº': 'ú', 'Ã‘': 'Ñ', 'Ã': 'í', 'Ã\xa0': 'à'
+    }
+    for broken, fixed in replacements.items():
+        text = text.replace(broken, fixed)
+    return text
+
 def format_name(full_name):
-    # Removes B-Ref technical markers (* for lefties, # for switch hitters, etc.)
-    # but preserves suffixes like Jr. and Sr.
-    clean_name = str(full_name).replace('*', '').replace('#', '').replace('?', '').strip()
-    
+    clean_name = sanitize_encoding(str(full_name))
+    clean_name = clean_name.replace('*', '').replace('#', '').replace('?', '').strip()
     parts = clean_name.split()
     if len(parts) >= 2:
-        # If the last part is a suffix, we treat the second-to-last part as the surname
         suffixes = ['Jr.', 'Sr.', 'II', 'III', 'IV']
         if parts[-1] in suffixes and len(parts) >= 3:
             return f"{parts[-2]} {parts[-1]}, {parts[0][0]}"
-        # Standard format: Surname, First Initial
         return f"{parts[-1]}, {parts[0][0]}"
-    return full_name
+    return clean_name
 
 def post_lineup():
     game_file = "game_number.txt"
@@ -33,80 +38,73 @@ def post_lineup():
 
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
-    
-    # Posting window (11am to 10pm ET)
-    if ny_now.hour not in range(11, 23):
-        return 
+    if ny_now.hour not in range(11, 23): return 
 
-    managers = [
-        "George Bamberger", "Yogi Berra", "Mickey Callaway", "Terry Collins",
-        "Mike Cubbage", "Joe Frazier", "Dallas Green", "Bud Harrelson",
-        "Gil Hodges", "Frank Howard", "Art Howe", "Davey Johnson",
-        "Jerry Manuel", "Roy McMillan", "Carlos Mendoza", "Salty Parker",
-        "Willie Randolph", "Luis Rojas", "Buck Showalter", "Casey Stengel",
-        "Jeff Torborg", "Joe Torre", "Bobby Valentine", "Wes Westrum"
-    ]
+    managers = ["George Bamberger", "Yogi Berra", "Mickey Callaway", "Terry Collins", "Mike Cubbage", "Joe Frazier", "Dallas Green", "Bud Harrelson", "Gil Hodges", "Frank Howard", "Art Howe", "Davey Johnson", "Jerry Manuel", "Roy McMillan", "Carlos Mendoza", "Salty Parker", "Willie Randolph", "Luis Rojas", "Buck Showalter", "Casey Stengel", "Jeff Torborg", "Joe Torre", "Bobby Valentine", "Wes Westrum"]
     selected_manager = random.choice(managers)
 
     try:
-        # Loading with utf-8-sig for proper character rendering
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
-        
-        # Clean column headers for non-breaking spaces
         batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
+        
         pos_col = next((n for n in ['Pos Summary', 'Pos', 'Positions'] if n in batters_df.columns), None)
         if not pos_col: return
         batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
 
-        # Filter for actual position players (2-9) and exclude pure pitchers
+        # Standard filter: Position players who aren't pitchers
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
-            
     except Exception as e:
         print(f"Error: {e}")
         return
 
-    # --- THE POSITIONAL DRAFT ---
-    lineup_sample = batters_df.sample(n=9).copy()
-    for col in ['OBP', 'SLG']:
-        lineup_sample[col] = pd.to_numeric(lineup_sample[col], errors='coerce').fillna(0)
-    lineup_sample['HITTING_VAL'] = (lineup_sample['OBP'] * 1.2) + (lineup_sample['SLG'] * 1.0)
-    lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False).reset_index()
-
-    mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
-    assignments = {}
-    taken_field_pos = set()
-
-    # Pass 1: Give players their primary position if available
-    for idx, player in lineup_sample.iterrows():
-        primary = str(player['Pos Summary'])[0]
-        if primary in mapping and primary not in taken_field_pos:
-            assignments[idx] = mapping[primary]
-            taken_field_pos.add(primary)
-
-    # Pass 2: Fill remaining field spots with secondary positions
-    for idx, player in lineup_sample.iterrows():
-        if idx not in assignments:
-            for char in str(player['Pos Summary']):
-                if char in mapping and char not in taken_field_pos:
-                    assignments[idx] = mapping[char]
-                    taken_field_pos.add(char)
-                    break
+    # --- THE SCOUTING PROCESS ---
+    field_needs = {
+        '2': 'C', '3': '1B', '4': '2B', '5': '3B', 
+        '6': 'SS', '7': 'LF', '8': 'CF', '9': 'RF'
+    }
     
-    # Pass 3: Everyone else is DH
-    for idx in range(9):
-        if idx not in assignments:
-            assignments[idx] = "DH"
+    final_roster = [] # List of (Name, Position, HittingValue)
+    used_names = set()
+
+    # Step 1: Fill the 8 field positions with qualified players
+    for code, pos_name in field_needs.items():
+        # Find every player who has played this code
+        qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code)].copy()
+        # Remove players already picked for another spot
+        qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
+        
+        if not qualified_pool.empty:
+            selection = qualified_pool.sample(1).iloc[0]
+            name = selection['Name']
+            used_names.add(name)
+            
+            # Calculate hitting value for batting order sorting later
+            obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
+            slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
+            val = (obp * 1.2) + slg
+            
+            final_roster.append({'Name': name, 'Pos': pos_name, 'Val': val})
+
+    # Step 2: Pick 1 DH from the remaining qualified players
+    dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
+    if not dh_pool.empty:
+        selection = dh_pool.sample(1).iloc[0]
+        obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
+        slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
+        final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
+        used_names.add(selection['Name'])
+
+    # Step 3: Sort by Hitting Value to create the Batting Order
+    lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
 
     final_lineup_text = []
-    for idx, player in lineup_sample.iterrows():
+    for i, player in enumerate(lineup_sorted, 1):
         p_name = format_name(player['Name'])
-        pos = assignments[idx]
-        final_lineup_text.append(f"{idx+1}. {p_name} - {pos}")
+        final_lineup_text.append(f"{i}. {p_name} - {player['Pos']}")
 
-    # --- PITCHING & BULLPEN ---
-    used_names = set(lineup_sample['Name'].tolist())
+    # --- PITCHING ---
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
     sp_row = available_p.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
@@ -114,14 +112,13 @@ def post_lineup():
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    # --- CONSTRUCT POST ---
+    # --- CONSTRUCT & POST ---
     status_text = f"Game #{current_game}\nManager: {selected_manager}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
         client = Client()
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_text)
-        print(f"Success! Game #{current_game} posted.")
         with open(game_file, "w", encoding='utf-8-sig') as f:
             f.write(str(current_game + 1))
     except Exception as e:
