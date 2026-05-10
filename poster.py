@@ -36,12 +36,13 @@ def post_lineup():
             batters_df[col] = pd.to_numeric(batters_df[col], errors='coerce').fillna(0)
 
     # 2. Manager Logic: Pick 9 unique hitters
+    # We use min() just in case the CSV is smaller than 9 for some reason
     lineup_sample = batters_df.sample(min(9, len(batters_df))).copy()
     
     # Calculate a simple "Manager Score" for batting order
     lineup_sample['HITTING_VAL'] = (lineup_sample.get('OBP', 0) * 1.2) + (lineup_sample.get('SLG', 0) * 1.0)
     
-    # SAFETY CHECK: Handle the 'Pos Summary' column error we saw
+    # SAFETY CHECK: Handle the 'Pos Summary' column if the scraper missed it
     if 'Pos Summary' in lineup_sample.columns:
         lineup_sample['PRIMARY_POS'] = lineup_sample['Pos Summary'].apply(get_primary_pos)
         lineup_sample['POS_COUNT'] = lineup_sample['Pos Summary'].str.len()
@@ -59,8 +60,9 @@ def post_lineup():
     dh_candidate_idx = lineup_sample['POS_COUNT'].idxmax() if 'POS_COUNT' in lineup_sample.columns else lineup_sample.index[0]
     
     for i, (idx, player) in enumerate(lineup_sample.iterrows(), 1):
-        pos_code = player['PRIMARY_POS']
+        pos_code = str(player['PRIMARY_POS'])
         
+        # If position is taken or they are the DH candidate, they DH
         if idx == dh_candidate_idx or pos_code in taken_positions or pos_code == 'DH':
             actual_pos = 'DH'
         else:
@@ -74,7 +76,7 @@ def post_lineup():
     used_names = set(lineup_sample['Name'].tolist())
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
     
-    # Find a starter (someone with a Games Started count > 0)
+    # Select Starter
     sp_name = available_p.sample(1).iloc[0]['Name']
     if 'GS' in available_p.columns:
         starters = available_p[pd.to_numeric(available_p['GS'], errors='coerce') > 0]
@@ -82,7 +84,10 @@ def post_lineup():
             sp_name = starters.sample(1).iloc[0]['Name']
 
     used_names.add(sp_name)
-    bullpen = available_p[~available_p['Name'].isin(used_names)].sample(4)['Name'].tolist()
+    
+    # Select Bullpen
+    bullpen_pool = available_p[~available_p['Name'].isin(used_names)]
+    bullpen = bullpen_pool.sample(min(4, len(bullpen_pool)))['Name'].tolist()
 
     # 4. Format Post
     status_text = "⚾️ Today's Mystery Manager Lineup:\n\n"
@@ -95,8 +100,14 @@ def post_lineup():
     # 5. Post to Bluesky
     try:
         client = Client()
-        handle = os.getenv('BLUESKY_HANDLE')
-        password = os.getenv('BLUESKY_PASSWORD')
+        # Using .get() to avoid crashing if secrets are missing
+        handle = os.environ.get('BLUESKY_HANDLE')
+        password = os.environ.get('BLUESKY_PASSWORD')
+        
+        if not handle or not password:
+            print("FAILED: Secrets BLUESKY_HANDLE or BLUESKY_PASSWORD are not set.")
+            return
+
         client.login(handle, password)
         client.send_post(status_text)
         print("Success! Mystery Manager post is live.")
