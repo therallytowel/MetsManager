@@ -24,24 +24,21 @@ def scrape_mets_data():
                 cols = table.columns.tolist()
                 
                 if category == 'batters':
-                    # A true batter table MUST have AB and HR, and NOT have IP (Innings Pitched)
-                    if 'AB' in cols and 'HR' in cols and 'IP' not in cols:
+                    # Must have AB (At Bats) and NOT have IP (Innings Pitched)
+                    if 'AB' in cols and 'IP' not in cols:
                         df = table
-                        print(f"Found the real Batting table with {len(table)} rows.")
                         break
                 
                 elif category == 'pitchers':
-                    # A pitcher table MUST have IP and ERA
+                    # Must have IP and ERA
                     if 'IP' in cols and 'ERA' in cols:
                         df = table
-                        print(f"Found the real Pitching table with {len(table)} rows.")
                         break
             
             if df is None:
-                print(f"⚠️ Warning: Could not find specific {category} table. Falling back.")
                 df = all_tables[0]
 
-            # Clean names and remove totals
+            # Clean names and remove totals/headers
             df['Name'] = df['Name'].str.replace(r'[*#?]', '', regex=True).str.strip()
             df = df[~df['Name'].isin(['Team Totals', 'Name', 'Totals', 'Rank'])]
             
@@ -49,7 +46,8 @@ def scrape_mets_data():
             if 'Pos Summary' not in df.columns and 'Pos' in df.columns:
                 df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
             
-            df.to_csv(f"mets_{category}.csv", index=False)
+            # CRITICAL: Save with utf-8 encoding for accents
+            df.to_csv(f"mets_{category}.csv", index=False, encoding='utf-8')
             print(f"✅ Saved mets_{category}.csv")
             time.sleep(2)
                 
