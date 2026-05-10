@@ -4,6 +4,7 @@ import random
 import datetime
 import pytz
 from atproto import Client
+import re
 
 def sanitize_encoding(text):
     replacements = {
@@ -15,8 +16,11 @@ def sanitize_encoding(text):
     return text
 
 def format_name(full_name):
+    # Remove B-Ref artifacts like HOF, *, #, and digits
     clean_name = sanitize_encoding(str(full_name))
-    clean_name = clean_name.replace('*', '').replace('#', '').replace('?', '').strip()
+    clean_name = re.sub(r'[*#?0-9]', '', clean_name)
+    clean_name = clean_name.replace('HOF', '').strip()
+    
     parts = clean_name.split()
     if len(parts) >= 2:
         suffixes = ['Jr.', 'Sr.', 'II', 'III', 'IV']
@@ -52,16 +56,13 @@ def post_lineup():
         if not pos_col: return
         batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
 
-        # Standard filter: Position players who aren't pitchers
+        # Basic filter
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
-        batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
     except Exception as e:
         print(f"Error: {e}")
         return
 
     # --- THE RECRUITMENT ---
-    # We will loop through the 8 field positions. 
-    # If a specific spot fails, we have a fallback list.
     field_needs = [
         ('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), 
         ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')
@@ -71,12 +72,12 @@ def post_lineup():
     used_names = set()
 
     for code, pos_name in field_needs:
-        # We use regex to find the position number anywhere in the string
+        # Improved search to find the number even if buried in symbols
         qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains(code, regex=False)]
         qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
         
         if qualified_pool.empty:
-            # Emergency Fallback: If we can't find a CF (8), find anyone who played any OF (7,8,9)
+            # If no specific OF, grab any player who has 7, 8, or 9 in their summary
             if code in ['7', '8', '9']:
                 qualified_pool = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[789]', regex=True)]
                 qualified_pool = qualified_pool[~qualified_pool['Name'].isin(used_names)]
@@ -88,10 +89,8 @@ def post_lineup():
             obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
             final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
-        else:
-            print(f"Warning: Could not find anyone for {pos_name}")
 
-    # Recruit 1 DH from whoever is left
+    # Add 1 DH
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
     if not dh_pool.empty:
         selection = dh_pool.sample(1).iloc[0]
@@ -99,14 +98,6 @@ def post_lineup():
         slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
         final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
         used_names.add(selection['Name'])
-
-    # Final Check: If we don't have 9 players, we grab randoms to fill the gaps
-    while len(final_roster) < 9:
-        fallback_pool = batters_df[~batters_df['Name'].isin(used_names)]
-        if fallback_pool.empty: break
-        selection = fallback_pool.sample(1).iloc[0]
-        used_names.add(selection['Name'])
-        final_roster.append({'Name': selection['Name'], 'Pos': 'UT', 'Val': 0})
 
     # Batting Order Sort
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
@@ -118,6 +109,9 @@ def post_lineup():
 
     # --- PITCHING ---
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
+    # Filter out any non-player names in the pitcher list
+    available_p = available_p[~available_p['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
+    
     sp_row = available_p.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
     used_names.add(sp_row['Name'])
