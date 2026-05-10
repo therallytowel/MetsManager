@@ -17,33 +17,41 @@ def scrape_mets_data():
         print(f"Connecting to Baseball-Reference for {category}...")
         try:
             response = requests.get(url, headers=headers, timeout=30)
+            # Use thousands and decimal parameters to help pandas parse correctly
             all_tables = pd.read_html(io.StringIO(response.text))
             
             df = None
             for table in all_tables:
-                # HITTER CHECK: Must have 'AB' (At Bats) and 'Pos Summary'
+                # BATTER CHECK: Must have 'Name' and either 'Pos Summary' or 'Pos'
                 if category == 'batters':
-                    if 'AB' in table.columns and 'Pos Summary' in table.columns:
+                    cols = table.columns.tolist()
+                    if 'Name' in cols and any('Pos' in c for c in cols):
                         df = table
                         break
-                # PITCHER CHECK: Must have 'IP' (Innings Pitched)
+                # PITCHER CHECK: Must have 'IP'
                 elif category == 'pitchers':
-                    if 'IP' in table.columns and 'ERA' in table.columns:
+                    if 'IP' in table.columns:
                         df = table
                         break
             
             if df is None:
-                print(f"⚠️ Warning: Could not isolate {category} table. Using fallback.")
                 df = all_tables[0]
+
+            # Clean column names (sometimes they are MultiIndex)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(-1)
 
             # Clean names and remove totals
             df['Name'] = df['Name'].str.replace(r'[*#?]', '', regex=True).str.strip()
-            df = df[df['Name'] != 'Team Totals']
-            df = df[df['Name'] != 'Name']
+            df = df[~df['Name'].isin(['Team Totals', 'Name', 'Totals'])]
+            
+            # Standardize Position column name
+            if 'Pos Summary' not in df.columns and 'Pos' in df.columns:
+                df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
             
             df.to_csv(f"mets_{category}.csv", index=False)
             print(f"✅ Created mets_{category}.csv")
-            time.sleep(5)
+            time.sleep(2)
                 
         except Exception as e:
             print(f"❌ Error: {e}")
