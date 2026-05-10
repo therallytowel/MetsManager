@@ -40,16 +40,16 @@ def post_lineup():
         print(f"Error: {e}")
         return
 
-    # Positions: 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF
+    # 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF
     field_needs = [('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')]
     final_roster = []
     used_names = set()
 
     for code, pos_name in field_needs:
-        # Strict Filter: Must have the position number AND NOT be a pitcher
-        mask = (batters_df[pos_col].astype(str).str.contains(code, na=False) & 
-                ~batters_df[pos_col].astype(str).str.contains('P', na=False))
-        
+        # We removed the ~contains('P') here. 
+        # If they played the position, they can play it today.
+        pattern = rf'(?<![0-9]){code}(?![0-9])'
+        mask = batters_df[pos_col].astype(str).str.contains(pattern, regex=True, na=False)
         qualified_pool = batters_df[mask & ~batters_df['Name'].isin(used_names)]
         
         if not qualified_pool.empty:
@@ -59,17 +59,16 @@ def post_lineup():
             slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
             final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
         else:
-            # Emergency OF Fallback (7, 8, 9)
+            # Emergency fallback: If no specific OF, grab any OF
             if code in ['7', '8', '9']:
-                any_of = batters_df[batters_df[pos_col].astype(str).str.contains('[789]', regex=True, na=False) & 
-                                    ~batters_df[pos_col].astype(str).str.contains('P', na=False)]
-                any_of = any_of[~any_of['Name'].isin(used_names)]
-                if not any_of.empty:
-                    selection = any_of.sample(1).iloc[0]
-                    used_names.add(selection['Name'])
-                    final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': -1})
+                fallback = batters_df[batters_df[pos_col].astype(str).str.contains('[789]', na=False)]
+                fallback = fallback[~fallback['Name'].isin(used_names)]
+                if not fallback.empty:
+                    sel = fallback.sample(1).iloc[0]
+                    used_names.add(sel['Name'])
+                    final_roster.append({'Name': sel['Name'], 'Pos': pos_name, 'Val': -1})
 
-    # DH Rule: Explicitly exclude anyone with 'P' in their Pos Summary
+    # DH Rule: ONLY here do we block pitchers.
     dh_pool = batters_df[~batters_df['Name'].isin(used_names) & 
                          ~batters_df[pos_col].astype(str).str.contains('P', na=False)]
     
@@ -80,20 +79,18 @@ def post_lineup():
         final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
         used_names.add(selection['Name'])
 
-    # Batting Order (1-9)
+    # Batting Order (Ensures we always have 9 items)
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
     final_lineup_text = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(lineup_sorted)]
 
-    # Pitching & Bullpen
+    # Pitching
     available_p = pitchers_df[~pitchers_df['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
     available_p = available_p[~available_p['Name'].isin(used_names)]
-    
     sp_row = available_p.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
     used_names.add(sp_row['Name'])
     rp_names = [format_name(n) for n in available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))['Name'].tolist()]
 
-    # Construct Post
     managers = ["Gil Hodges", "Casey Stengel", "Terry Collins", "Davey Johnson", "Bobby Valentine", "Buck Showalter", "Willie Randolph"]
     status_text = f"Game #{current_game}\nManager: {random.choice(managers)}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
