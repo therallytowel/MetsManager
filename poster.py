@@ -35,77 +35,64 @@ def post_lineup():
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
         
-        # Aggressive column cleaning
         batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
-        pos_col = next((n for n in ['Pos Summary', 'Pos', 'Positions'] if n in batters_df.columns), 'Pos Summary')
+        pitchers_df.columns = [str(c).replace('\xa0', ' ').strip() for c in pitchers_df.columns]
         
-        # Force the position column to be a clean string
+        pos_col = next((n for n in ['Pos Summary', 'Pos', 'Positions'] if n in batters_df.columns), 'Pos Summary')
         batters_df[pos_col] = batters_df[pos_col].astype(str).str.strip()
     except Exception as e:
         print(f"Error: {e}")
         return
 
-    # Recruitment Plan
+    # 1. Recruit Fielders
     field_needs = [('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')]
     final_roster = []
     used_names = set()
 
-    # Pass 1: Find the 8 fielders
     for code, pos_name in field_needs:
-        # We look for the digit anywhere in the string
         mask = batters_df[pos_col].str.contains(code, na=False)
-        qualified_pool = batters_df[mask & ~batters_df['Name'].isin(used_names)]
-        
-        if not qualified_pool.empty:
-            selection = qualified_pool.sample(1).iloc[0]
-            used_names.add(selection['Name'])
-            obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
-            slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
-            final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
-        else:
-            # Emergency: Grab any position player if the specific spot is empty
-            print(f"Warning: Could not find specific {pos_name}, scouting backup...")
-            backup = batters_df[~batters_df[pos_col].str.contains('P', na=False) & ~batters_df['Name'].isin(used_names)]
-            if not backup.empty:
-                selection = backup.sample(1).iloc[0]
-                used_names.add(selection['Name'])
-                final_roster.append({'Name': selection['Name'], 'Pos': pos_name, 'Val': -1})
+        pool = batters_df[mask & ~batters_df['Name'].isin(used_names)]
+        if not pool.empty:
+            sel = pool.sample(1).iloc[0]
+            used_names.add(sel['Name'])
+            final_roster.append({'Name': sel['Name'], 'Pos': pos_name, 'Val': (pd.to_numeric(sel['OBP'], errors='coerce') or 0) * 1.2 + (pd.to_numeric(sel['SLG'], errors='coerce') or 0)})
 
-    # Pass 2: DH (Strictly No Pitchers)
+    # 2. DH (No pitchers allowed)
     dh_pool = batters_df[~batters_df['Name'].isin(used_names) & ~batters_df[pos_col].str.contains('P', na=False)]
     if not dh_pool.empty:
-        selection = dh_pool.sample(1).iloc[0]
-        used_names.add(selection['Name'])
-        obp = pd.to_numeric(selection['OBP'], errors='coerce') or 0
-        slg = pd.to_numeric(selection['SLG'], errors='coerce') or 0
-        final_roster.append({'Name': selection['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
+        sel = dh_pool.sample(1).iloc[0]
+        used_names.add(sel['Name'])
+        final_roster.append({'Name': sel['Name'], 'Pos': 'DH', 'Val': (pd.to_numeric(sel['OBP'], errors='coerce') or 0) * 1.2 + (pd.to_numeric(sel['SLG'], errors='coerce') or 0)})
 
-    # FINAL CHECK: If we don't have 9 players, don't post.
-    if len(final_roster) < 9:
-        print(f"Lineup incomplete ({len(final_roster)}/9). Check your CSV data for outfielders.")
-        return
+    if len(final_roster) < 9: return
 
-    # Sort & Format
-    lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
-    final_lineup_text = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(lineup_sorted)]
-
-    # Pitchers
-    available_p = pitchers_df[~pitchers_df['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
-    available_p = available_p[~available_p['Name'].isin(used_names)]
-    sp_row = available_p.sample(1).iloc[0]
+    # 3. Recruit ACTUAL Pitchers
+    # Filter out column headers or totals that might be in the pitchers CSV
+    true_pitchers = pitchers_df[~pitchers_df['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
+    # Ensure the pitcher isn't somehow also in our starting lineup
+    true_pitchers = true_pitchers[~true_pitchers['Name'].isin(used_names)]
+    
+    # Select SP and RP
+    sp_row = true_pitchers.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
     used_names.add(sp_row['Name'])
-    rp_names = [format_name(n) for n in available_p[~available_p['Name'].isin(used_names)].sample(4)['Name'].tolist()]
+    
+    rp_pool = true_pitchers[~true_pitchers['Name'].isin(used_names)].sample(4)
+    rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    # Post
-    status_text = f"Game #{current_game}\nManager: {random.choice(['Davey Johnson', 'Gil Hodges', 'Bobby Valentine', 'Buck Showalter', 'Casey Stengel'])}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
+    # Format & Post
+    lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
+    final_lineup_text = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(lineup_sorted)]
+    
+    managers = ["Bobby Valentine", "Gil Hodges", "Davey Johnson", "Buck Showalter", "Willie Randolph", "Casey Stengel"]
+    status_text = f"Game #{current_game}\nManager: {random.choice(managers)}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
         client = Client()
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_text)
         with open(game_file, "w", encoding='utf-8-sig') as f: f.write(str(current_game + 1))
-        print(f"✅ Success: Game #{current_game} posted.")
+        print(f"✅ Success: Game #{current_game} posted with a real pitcher!")
     except Exception as e: print(f"Post failed: {e}")
 
 if __name__ == "__main__":
