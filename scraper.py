@@ -17,6 +17,7 @@ def scrape_mets_data():
         print(f"Connecting to Baseball-Reference for {category}...")
         try:
             response = requests.get(url, headers=headers, timeout=30)
+            # io.StringIO handles the HTML string for pandas
             all_tables = pd.read_html(io.StringIO(response.text))
             
             df = None
@@ -24,35 +25,44 @@ def scrape_mets_data():
                 cols = table.columns.tolist()
                 
                 if category == 'batters':
-                    # Must have AB (At Bats) and NOT have IP (Innings Pitched)
+                    # Logic: Must have AB (At Bats) and NOT have IP (Innings Pitched)
+                    # This ensures we don't accidentally grab a pitching table
                     if 'AB' in cols and 'IP' not in cols:
                         df = table
                         break
                 
                 elif category == 'pitchers':
-                    # Must have IP and ERA
+                    # Logic: Must have IP and ERA
                     if 'IP' in cols and 'ERA' in cols:
                         df = table
                         break
             
+            # Fallback if specific logic fails
             if df is None:
                 df = all_tables[0]
 
-            # Clean names and remove totals/headers
+            # --- DATA CLEANING ---
+            # Remove the characters B-Ref uses for lefties/switch hitters
+            # We keep the name string intact otherwise (preserving suffixes like Jr./Sr.)
             df['Name'] = df['Name'].str.replace(r'[*#?]', '', regex=True).str.strip()
+            
+            # Remove rows that are just sub-headers or team totals
             df = df[~df['Name'].isin(['Team Totals', 'Name', 'Totals', 'Rank'])]
             
-            # Standardize Position column
+            # Standardize Position column name for the poster.py "hunt"
             if 'Pos Summary' not in df.columns and 'Pos' in df.columns:
                 df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
             
-            # CRITICAL: Save with utf-8 encoding for accents
-            df.to_csv(f"mets_{category}.csv", index=False, encoding='utf-8')
-            print(f"✅ Saved mets_{category}.csv")
+            # CRITICAL: Save with utf-8-sig encoding.
+            # This handles accents (like Canó) correctly in Windows-based CSV viewers.
+            df.to_csv(f"mets_{category}.csv", index=False, encoding='utf-8-sig')
+            print(f"✅ Successfully saved mets_{category}.csv")
+            
+            # Polite delay between requests
             time.sleep(2)
                 
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"❌ Error scraping {category}: {e}")
 
 if __name__ == "__main__":
     scrape_mets_data()
