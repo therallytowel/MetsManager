@@ -37,9 +37,8 @@ def post_lineup():
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
-    # Posting window (11am to 10pm ET)
     if ny_now.hour not in range(11, 23):
-        print(f"Skipping... Hour is {ny_now.hour}. Manager is off-duty.")
+        print(f"Skipping... Hour is {ny_now.hour}.")
         return 
 
     managers = [
@@ -57,10 +56,10 @@ def post_lineup():
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8')
         
-        # Clean up column names (remove hidden spaces/artifacts)
-        batters_df.columns = [str(c).strip() for c in batters_df.columns]
+        # Clean column names and handle non-breaking spaces
+        batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
         
-        # Hunt for the position column regardless of what it's named
+        # Hunt for the position column
         pos_col = None
         for potential_name in ['Pos Summary', 'Pos', 'Positions', 'P']:
             if potential_name in batters_df.columns:
@@ -71,18 +70,16 @@ def post_lineup():
             batters_df.rename(columns={pos_col: 'Pos Summary'}, inplace=True)
             print(f"Found position data in column: {pos_col}")
         else:
-            print("CRITICAL: No position column found. Headers are:", batters_df.columns.tolist())
+            print("CRITICAL: Still no position column found. Headers are:", batters_df.columns.tolist())
             return
 
         # --- THE DEFENSIVE SPECIALIST FILTER ---
-        # 1. Must contain a digit 2-9 (Catcher through RF)
+        # Must contain a digit 2-9 and NOT contain 'P'
         batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
-        
-        # 2. Must NOT contain 'P' (Standard Pitcher designation)
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
             
     except Exception as e:
-        print(f"Detailed Error loading CSV: {e}")
+        print(f"Detailed Error: {e}")
         return
 
     # --- 4. LINEUP SELECTION ---
