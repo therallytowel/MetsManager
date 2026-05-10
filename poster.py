@@ -14,7 +14,7 @@ def get_primary_pos(pos_str):
     return 'DH'
 
 def format_name(full_name):
-    """Converts 'Keith Hernandez' to 'Hernandez, K' and cleans suffixes."""
+    """Converts 'Keith Hernandez' to 'Hernandez, K'."""
     clean_name = str(full_name).replace('Jr.', '').replace('Sr.', '').strip()
     parts = clean_name.split()
     if len(parts) >= 2:
@@ -37,9 +37,8 @@ def post_lineup():
     ny_tz = pytz.timezone('America/New_York')
     ny_now = datetime.datetime.now(ny_tz)
     
-    # Standard posting window (1pm - 10pm ET)
-    if ny_now.hour not in range(13, 23):
-        print(f"Skipping... Hour is {ny_now.hour}. Manager is off-duty.")
+    if ny_now.hour not in range(11, 23): # 11am to 10pm ET
+        print(f"Skipping... Hour is {ny_now.hour}.")
         return 
 
     managers = [
@@ -52,46 +51,39 @@ def post_lineup():
     ]
     selected_manager = random.choice(managers)
 
-    # --- 3. DATA LOADING & ROBUST CLEANING ---
+    # --- 3. DATA LOADING & FILTERING ---
     try:
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8')
         
-        # Standardize column names immediately to prevent KeyErrors
         if 'Pos Summary' not in batters_df.columns:
-            if 'Pos' in batters_df.columns:
-                batters_df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
-            else:
-                batters_df['Pos Summary'] = 'DH'
+            batters_df.rename(columns={'Pos': 'Pos Summary'}, inplace=True, errors='ignore')
             
-        # THE ULTIMATE PITCHER FILTER
-        # Removes anyone with 'P' in their position summary (e.g., 'P', 'P/H', '1P')
+        # --- THE DEFENSIVE SPECIALIST FILTER ---
+        # 1. Must contain a digit 2-9 (Catcher through RF)
+        batters_df = batters_df[batters_df['Pos Summary'].astype(str).str.contains('[2-9]', regex=True, na=False)].copy()
+        
+        # 2. Must NOT contain 'P' (Standard Pitcher designation)
         batters_df = batters_df[~batters_df['Pos Summary'].astype(str).str.contains('P', na=False)].copy()
-        batters_df = batters_df.dropna(subset=['Pos Summary'])
             
     except Exception as e:
-        print(f"Error loading CSV data: {e}")
+        print(f"Error: {e}")
         return
 
     # --- 4. LINEUP SELECTION ---
     if len(batters_df) < 9:
-        print("Not enough batters found after filtering. Post aborted.")
+        print("Error: Roster too small. Filter might be too strict.")
         return
 
     lineup_sample = batters_df.sample(n=9).copy()
     
-    # Ensure numeric types for sorting
     for col in ['OBP', 'SLG']:
         lineup_sample[col] = pd.to_numeric(lineup_sample[col], errors='coerce').fillna(0)
     
-    # Manager's "Saber-metric" calculation
     lineup_sample['HITTING_VAL'] = (lineup_sample['OBP'] * 1.2) + (lineup_sample['SLG'] * 1.0)
-    
-    # Safely assign position codes
     lineup_sample['PRIMARY_POS_CODE'] = lineup_sample['Pos Summary'].apply(get_primary_pos)
     lineup_sample['POS_COUNT'] = lineup_sample['Pos Summary'].astype(str).str.len()
 
-    # Sort 1-9 based on hitting value
     lineup_sample = lineup_sample.sort_values(by='HITTING_VAL', ascending=False)
     
     final_lineup_text = []
@@ -101,7 +93,6 @@ def post_lineup():
     for i, (idx, player) in enumerate(lineup_sample.iterrows(), 1):
         pos_code = str(player.get('PRIMARY_POS_CODE', 'DH'))
         p_name = format_name(player['Name'])
-        
         mapping = {'2':'C', '3':'1B', '4':'2B', '5':'3B', '6':'SS', '7':'LF', '8':'CF', '9':'RF'}
         
         if idx == dh_idx or pos_code in taken_positions or pos_code == 'DH':
@@ -112,10 +103,9 @@ def post_lineup():
         
         final_lineup_text.append(f"{i}. {p_name} - {actual_pos}")
 
-    # --- 5. PITCHING SELECTION ---
+    # --- 5. PITCHING ---
     used_names = set(lineup_sample['Name'].tolist())
     available_p = pitchers_df[~pitchers_df['Name'].isin(used_names)].copy()
-    
     sp_row = available_p.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
     
@@ -123,38 +113,23 @@ def post_lineup():
     rp_pool = available_p[~available_p['Name'].isin(used_names)].sample(min(4, len(available_p)-1))
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
-    # --- 6. CONSTRUCT POST ---
+    # --- 6. POST ---
     status_text = f"Game #{current_game}\nManager: {selected_manager}\n\n"
     status_text += "\n".join(final_lineup_text)
     status_text += f"\n\nP: {sp_name}\n\nBullpen:\n"
     status_text += "\n".join(rp_names)
     status_text += "\n\n#MetsSky"
 
-    # --- 7. POST TO BLUESKY ---
     try:
         client = Client()
-        handle = os.environ.get('BSKY_HANDLE')
-        password = os.environ.get('BSKY_PASSWORD')
-        
-        if not handle or not password:
-            print("FAILED: Secrets (Handle/Password) missing.")
-            return
-
-        client.login(handle, password)
-        
-        # Tighten spacing if over 300 characters
-        if len(status_text) > 300:
-            status_text = status_text.replace("\n\n", "\n").strip()
-
+        client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_text)
-        print(f"Success! Posted Game #{current_game} with Manager {selected_manager}.")
+        print(f"Success! Posted Game #{current_game}")
 
-        # Increment game counter file
         with open(game_file, "w", encoding='utf-8') as f:
             f.write(str(current_game + 1))
-
     except Exception as e:
-        print(f"FAILED TO POST: {e}")
+        print(f"Post failed: {e}")
 
 if __name__ == "__main__":
     post_lineup()
