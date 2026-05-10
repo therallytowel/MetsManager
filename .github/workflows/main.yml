@@ -2,27 +2,31 @@ name: Daily Mets Data and Bluesky Post
 
 on:
   schedule:
+    # Runs at 16:00, 17:00, and 18:00 UTC. 
+    # This ensures it hits 1:00 PM ET regardless of Daylight Savings.
     - cron: '0 16,17,18 * * *' 
-  workflow_dispatch: 
+  workflow_dispatch: # Allows you to run it manually for testing
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # This line is CRITICAL for fixing "Exit Code 1"
+    
+    # This section allows the bot to save updated CSVs back to your repo
     permissions:
-      contents: write 
+      contents: write
       
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4 # Updated version
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5 # Updated version
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
       - name: Install dependencies
-        run: pip install pandas lxml requests html5lib atproto pytz
+        run: |
+          pip install pandas lxml requests html5lib atproto pytz
 
       - name: Run scraper
         run: python scraper.py
