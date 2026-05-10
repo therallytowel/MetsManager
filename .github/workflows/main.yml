@@ -2,20 +2,22 @@ name: Daily Mets Data and Bluesky Post
 
 on:
   schedule:
-    # This runs at 16:00, 17:00, and 18:00 UTC. 
-    # One of these will always hit the 1:00 PM ET window regardless of DST.
     - cron: '0 16,17,18 * * *' 
-  workflow_dispatch: # Allows you to run it manually for testing
+  workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # This line is CRITICAL for fixing "Exit Code 1"
+    permissions:
+      contents: write 
+      
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Updated version
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # Updated version
         with:
           python-version: '3.9'
 
