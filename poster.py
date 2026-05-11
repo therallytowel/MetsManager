@@ -1,16 +1,16 @@
 import pandas as pd
 import os
 import random
-from atproto import Client
+from atproto import Client, models # Added models for proper threading
 import re
 
 def get_clean_name(name, all_names_list):
-    """Fixes encoding and applies Smart Name logic."""
     name_str = str(name)
+    # Beefed up replacement for "triple-encoded" artifacts
     replacements = {
-        'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ã³': 'ó', 'Ãº': 'ú',
-        'Ã±': 'ñ', 'Ã': 'Á', 'Ã‰': 'É', 'Ã': 'Í', 'Ã“': 'Ó',
-        'Ãš': 'Ú', 'Ã‘': 'Ñ'
+        'ÃƒÂ³': 'ó', 'ÃƒÂ±': 'ñ', 'ÃƒÂ¡': 'á', 'ÃƒÂ©': 'é', 'ÃƒÂ­': 'í', 
+        'ÃƒÂº': 'ú', 'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ã³': 'ó', 
+        'Ãº': 'ú', 'Ã±': 'ñ', 'Ã‘': 'Ñ'
     }
     for bad, good in replacements.items():
         name_str = name_str.replace(bad, good)
@@ -62,12 +62,10 @@ def post_lineup():
         print(f"❌ Mapping Error: {e}")
         return
 
-    # 1. Pitcher Selection & The 'No-Fly Zone' for Hitters
+    # Pitcher Selection & Exclusion Set
     all_p = pitchers[pitchers['POS_SEARCH'].astype(str).str.contains('1', na=False)].copy()
     all_p['G_NUM'] = pd.to_numeric(all_p['G_COL'], errors='coerce').fillna(0)
     all_p['GS_NUM'] = pd.to_numeric(all_p['GS_COL'], errors='coerce').fillna(0)
-    
-    # This set identifies anyone who is primarily a pitcher
     pitcher_names_set = set(all_p['NAME'].unique())
 
     starter_pool = all_p[all_p['GS_NUM'] > 0]
@@ -78,8 +76,7 @@ def post_lineup():
     final_rp_pool = reliever_pool[reliever_pool['NAME'] != sp_row['NAME']]
     rp_rows = final_rp_pool.sample(min(4, len(final_rp_pool)))
 
-    # 2. Hitter Pool (Exclude ANYONE in the Pitcher File)
-    # This ensures both the lineup AND the bench are strictly position players
+    # Hitter Pool (Strict No-Pitcher Rule)
     h_pool = batters[
         (batters['POS_SEARCH'].astype(str).str.contains(r'[2-9]', na=False)) & 
         (~batters['NAME'].isin(pitcher_names_set))
@@ -107,7 +104,6 @@ def post_lineup():
         except: v_dh = 0.0
         final_roster.append({'Name': dh_sel['NAME'], 'Pos': 'DH', 'Val': v_dh})
 
-    # 3. Bench Selection (5 hitters NOT in the lineup and NOT pitchers)
     bench_pool = h_pool[~h_pool['NAME'].isin(used_names)]
     bench_rows = bench_pool.sample(min(5, len(bench_pool)))
     bench_names = [get_clean_name(n['NAME'], master_names) for _, n in bench_rows.iterrows()]
@@ -124,10 +120,7 @@ def post_lineup():
         f"\n\nP: {get_clean_name(sp_row['NAME'], master_names)}\n"
         f"Bullpen: " + ", ".join(bp_names)
     )
-
-    if len(status_body) > 300:
-        status_body = status_body[:297] + "..."
-
+    if len(status_body) > 300: status_body = status_body[:297] + "..."
     bench_body = f"Bench: {', '.join(bench_names)}"
 
     print("--- POST PREVIEW ---")
@@ -139,13 +132,17 @@ def post_lineup():
         client = Client()
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         
-        # Post Lineup
-        root_post = client.send_post(status_body)
+        # 1. Post the Main Lineup
+        main_post = client.send_post(status_body)
         
-        # Post Bench Thread
+        # 2. Extract the IDs for the reply (The Fix)
+        root_ref = models.ComAtprotoRepoStrongRef.Main(cid=main_post.cid, uri=main_post.uri)
+        parent_ref = models.ComAtprotoRepoStrongRef.Main(cid=main_post.cid, uri=main_post.uri)
+        
+        # 3. Post the Bench as a reply
         client.send_post(
             text=bench_body,
-            reply_to={'root': root_post, 'parent': root_post}
+            reply_to=models.AppBskyFeedPost.ReplyRef(parent=parent_ref, root=root_ref)
         )
         
         with open(game_file, "w") as f: f.write(str(current_game + 1))
