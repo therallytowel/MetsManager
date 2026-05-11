@@ -1,45 +1,32 @@
-name: Post Mets Lineup
+name: Mets Mystery Manager Daily Lineup
 
 on:
   schedule:
-    # This runs the bot daily at 1:00 PM UTC (9:00 AM ET)
-    - cron: '0 13 * * *'
-  # This lets you run it manually by clicking a button in the Actions tab
-  workflow_dispatch:
+    # 17:00 UTC is 1:00 PM EDT (Stamford Time)
+    # Note: If Daylight Savings ends, this moves to 12:00 PM EDT.
+    - cron: '0 17 * * *'
+  workflow_dispatch: # This allows you to run it manually anytime
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
-    # This gives GitHub permission to write the updated game number to your repo
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install atproto pandas
+          pip install pandas atproto
 
-      - name: Run poster
+      - name: Run Lineup Script
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
-        # Straight to the point: no scraper, just the poster
-        run: python poster.py
-
-      - name: Commit and push if game number changed
-        run: |
-          git config --global user.name "MetsManagerBot"
-          git config --global user.email "bot@metssky.com"
-          git add game_number.txt
-          # Only commit if the file actually changed to avoid errors
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update game number to $(cat game_number.txt)" && git push)
+        run: python your_script_name.py
