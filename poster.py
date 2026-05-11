@@ -30,26 +30,26 @@ def post_lineup():
             except: current_game = 1
 
     try:
-        batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
+        batters_df = pd.read_csv('mets_bat_data.csv', encoding='utf-8-sig') if os.path.exists('mets_bat_data.csv') else pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
         
-        # CRITICAL FIX: Strip all invisible characters from column names
+        # Clean column names
         batters_df.columns = [re.sub(r'\s+', ' ', str(c).strip()) for c in batters_df.columns]
         
-        pos_col = 'Pos Summary'
-        if pos_col not in batters_df.columns:
-            # Fallback check
+        # Auto-detect position column
+        pos_col = 'Pos Summary' if 'Pos Summary' in batters_df.columns else None
+        if not pos_col:
             pos_col = next((c for c in batters_df.columns if 'Pos' in c), None)
 
         if not pos_col:
-            print(f"❌ ERROR: Still no position column. Found: {list(batters_df.columns)}")
+            print(f"❌ Error: Missing position column. Found: {list(batters_df.columns)}")
             return
 
     except Exception as e:
         print(f"❌ File Error: {e}")
         return
 
-    # 1. RECRUIT FIELDERS
+    # 1. RECRUIT FIELDERS (2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF)
     field_needs = [('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')]
     final_roster = []
     used_names = set()
@@ -65,7 +65,7 @@ def post_lineup():
             slg = pd.to_numeric(sel['SLG'], errors='coerce') or 0
             final_roster.append({'Name': sel['Name'], 'Pos': pos_label, 'Val': (obp * 1.2) + slg})
         else:
-            print(f"🚫 SCOUTING FAILURE: No {pos_label} (Code {code}) found. Game forfeited.")
+            print(f"🚫 SCOUTING FAILURE: No {pos_label} (Code {code}) found. Aborting.")
             return
 
     # 2. RECRUIT DH
@@ -89,7 +89,9 @@ def post_lineup():
     # 4. FORMAT & POST
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
     final_lineup_text = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(lineup_sorted)]
-    status_text = f"Game #{current_game}\nManager: {random.choice(['Bobby Valentine', 'Gil Hodges', 'Davey Johnson', 'Buck Showalter', 'Terry Collins'])}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
+    
+    managers = ["Bobby Valentine", "Gil Hodges", "Davey Johnson", "Buck Showalter", "Willie Randolph", "Casey Stengel", "Terry Collins"]
+    status_text = f"Game #{current_game}\nManager: {random.choice(managers)}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
         client = Client()
