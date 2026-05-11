@@ -51,18 +51,12 @@ def post_lineup():
         print(f"❌ Load Error: {e}")
         return
 
-    # --- FIXED PITCHER LOGIC ---
-    # 1. Filter for primary pitchers
+    # --- PITCHER LOGIC ---
     all_pitchers = pitchers[pitchers['POS_SEARCH'].str.startswith('1', na=False)].copy()
-    
-    # 2. Convert G and GS to numeric safely
     all_pitchers['G_NUM'] = pd.to_numeric(all_pitchers['G_COL'], errors='coerce').fillna(0)
     all_pitchers['GS_NUM'] = pd.to_numeric(all_pitchers['GS_COL'], errors='coerce').fillna(0)
 
-    # Starter Pool: Anyone with at least 1 Start
     starter_pool = all_pitchers[all_pitchers['GS_NUM'] > 0]
-    
-    # Reliever Pool: Only people who appeared in relief (Games > Starts)
     reliever_pool = all_pitchers[all_pitchers['G_NUM'] > all_pitchers['GS_NUM']]
 
     # --- HITTER LOGIC ---
@@ -78,21 +72,21 @@ def post_lineup():
         if not pool.empty:
             sel = pool.sample(1).iloc[0]
             used_names.add(sel['NAME'])
-            val = pd.to_numeric(sel['OPS'], errors='coerce') or 0.0
+            # FIXED: Extracting the value safely
+            raw_ops = pd.to_numeric(sel['OPS'], errors='coerce')
+            val = float(raw_ops) if pd.notnull(raw_ops) else 0.0
             final_roster.append({'Name': sel['NAME'], 'Pos': label, 'Val': val})
 
     dh_pool = real_hitter_pool[~real_hitter_pool['NAME'].isin(used_names)]
     if not dh_pool.empty:
         dh_sel = dh_pool.sample(1).iloc[0]
-        final_roster.append({'Name': dh_sel['NAME'], 'Pos': 'DH', 'Val': pd.to_numeric(dh_sel['OPS'], errors='coerce') or 0.0})
+        raw_ops = pd.to_numeric(dh_sel['OPS'], errors='coerce')
+        val = float(raw_ops) if pd.notnull(raw_ops) else 0.0
+        final_roster.append({'Name': dh_sel['NAME'], 'Pos': 'DH', 'Val': val})
 
     # --- SELECT PITCHERS ---
     sp_row = starter_pool.sample(1).iloc[0]
-    
-    # Filter for relievers, excluding the current starter
     final_rp_pool = reliever_pool[reliever_pool['NAME'] != sp_row['NAME']]
-    
-    # Sample up to 4 relievers
     rp_rows = final_rp_pool.sample(min(4, len(final_rp_pool)))
 
     # --- FORMAT & POST ---
@@ -115,7 +109,7 @@ def post_lineup():
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_body)
         with open(game_file, "w") as f: f.write(str(current_game + 1))
-        print(f"✅ Success! Game #{current_game} posted with a true Bullpen.")
+        print(f"✅ Success! Game #{current_game} is live.")
     except Exception as e:
         print(f"❌ Bluesky Error: {e}")
 
