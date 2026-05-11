@@ -32,17 +32,17 @@ def post_lineup():
     try:
         batters_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
-        batters_df.columns = [str(c).strip() for c in batters_df.columns]
         
-        # Look for the position column
-        pos_col = None
-        for col in ['Pos Summary', 'Pos', 'Positions']:
-            if col in batters_df.columns:
-                pos_col = col
-                break
+        # CRITICAL FIX: Strip all invisible characters from column names
+        batters_df.columns = [re.sub(r'\s+', ' ', str(c).strip()) for c in batters_df.columns]
         
+        pos_col = 'Pos Summary'
+        if pos_col not in batters_df.columns:
+            # Fallback check
+            pos_col = next((c for c in batters_df.columns if 'Pos' in c), None)
+
         if not pos_col:
-            print(f"❌ ERROR: No position column found. Columns available: {list(batters_df.columns)}")
+            print(f"❌ ERROR: Still no position column. Found: {list(batters_df.columns)}")
             return
 
     except Exception as e:
@@ -65,7 +65,7 @@ def post_lineup():
             slg = pd.to_numeric(sel['SLG'], errors='coerce') or 0
             final_roster.append({'Name': sel['Name'], 'Pos': pos_label, 'Val': (obp * 1.2) + slg})
         else:
-            print(f"🚫 SCOUTING FAILURE: No legitimate {pos_label} found. Aborting.")
+            print(f"🚫 SCOUTING FAILURE: No {pos_label} (Code {code}) found. Game forfeited.")
             return
 
     # 2. RECRUIT DH
@@ -89,9 +89,7 @@ def post_lineup():
     # 4. FORMAT & POST
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
     final_lineup_text = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(lineup_sorted)]
-    managers = ["Bobby Valentine", "Gil Hodges", "Davey Johnson", "Buck Showalter", "Willie Randolph", "Casey Stengel", "Terry Collins"]
-    
-    status_text = f"Game #{current_game}\nManager: {random.choice(managers)}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
+    status_text = f"Game #{current_game}\nManager: {random.choice(['Bobby Valentine', 'Gil Hodges', 'Davey Johnson', 'Buck Showalter', 'Terry Collins'])}\n\n" + "\n".join(final_lineup_text) + f"\n\nP: {sp_name}\n\nBullpen:\n" + "\n".join(rp_names) + "\n\n#MetsSky"
 
     try:
         client = Client()
