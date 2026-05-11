@@ -41,47 +41,42 @@ def post_lineup():
         pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
         
         # Clean column names
-        batters_df.columns = [str(c).replace('\xa0', ' ').strip() for c in batters_df.columns]
-        pitchers_df.columns = [str(c).replace('\xa0', ' ').strip() for c in pitchers_df.columns]
+        batters_df.columns = [str(c).strip() for c in batters_df.columns]
+        pitchers_df.columns = [str(c).strip() for c in pitchers_df.columns]
         
-        pos_col = next((n for n in ['Pos Summary', 'Pos', 'Positions'] if n in batters_df.columns), 'Pos Summary')
-        batters_df[pos_col] = batters_df[pos_col].astype(str).str.strip()
+        pos_col = 'Pos Summary'
     except Exception as e:
         print(f"❌ File Error: {e}")
         return
 
-    # 1. RECRUIT FIELDERS (C, 1B, 2B, 3B, SS, LF, CF, RF)
+    # 1. RECRUIT FIELDERS (Strict: No Randos)
+    # Positions: 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF
     field_needs = [
-        ('2', 'C', 'C'), ('3', '1B', '1B'), ('4', '2B', '2B'), 
-        ('5', '3B', '3B'), ('6', 'SS', 'SS'), ('7', 'LF', 'LF'), 
-        ('8', 'CF', 'CF'), ('9', 'RF', 'RF')
+        ('2', 'C'), ('3', '1B'), ('4', '2B'), 
+        ('5', '3B'), ('6', 'SS'), ('7', 'LF'), 
+        ('8', 'CF'), ('9', 'RF')
     ]
     final_roster = []
     used_names = set()
 
-    for num, let, pos_name in field_needs:
-        # Check for numerical code OR letter code
-        mask = (batters_df[pos_col].str.contains(num, na=False) | 
-                batters_df[pos_col].str.contains(let, na=False))
+    for code, pos_label in field_needs:
+        # Mask ensures the player specifically played that position
+        mask = batters_df[pos_col].astype(str).str.contains(code, na=False)
         pool = batters_df[mask & ~batters_df['Name'].isin(used_names)]
         
         if not pool.empty:
             sel = pool.sample(1).iloc[0]
             used_names.add(sel['Name'])
+            # Calculate batting order value (OBP + SLG)
             obp = pd.to_numeric(sel['OBP'], errors='coerce') or 0
             slg = pd.to_numeric(sel['SLG'], errors='coerce') or 0
-            final_roster.append({'Name': sel['Name'], 'Pos': pos_name, 'Val': (obp * 1.2) + slg})
+            final_roster.append({'Name': sel['Name'], 'Pos': pos_label, 'Val': (obp * 1.2) + slg})
         else:
-            # EMERGENCY SAFETY NET: Grab any non-pitcher if position is empty in CSV
-            print(f"⚠️ Pos {pos_name} not found. Recruiting utility player...")
-            backup_pool = batters_df[~batters_df[pos_col].str.contains('P', na=False) & ~batters_df['Name'].isin(used_names)]
-            if not backup_pool.empty:
-                sel = backup_pool.sample(1).iloc[0]
-                used_names.add(sel['Name'])
-                final_roster.append({'Name': sel['Name'], 'Pos': pos_name, 'Val': 0})
+            print(f"🚫 SCOUTING FAILURE: No legitimate {pos_label} found. Aborting.")
+            return
 
-    # 2. RECRUIT DH (Strictly No Pitchers)
-    dh_pool = batters_df[~batters_df['Name'].isin(used_names) & ~batters_df[pos_col].str.contains('P', na=False)]
+    # 2. RECRUIT DH (Must be a batter, not a pitcher)
+    dh_pool = batters_df[~batters_df['Name'].isin(used_names) & ~batters_df[pos_col].astype(str).str.contains('P', na=False)]
     if not dh_pool.empty:
         sel = dh_pool.sample(1).iloc[0]
         used_names.add(sel['Name'])
@@ -90,20 +85,20 @@ def post_lineup():
         final_roster.append({'Name': sel['Name'], 'Pos': 'DH', 'Val': (obp * 1.2) + slg})
 
     if len(final_roster) < 9:
-        print(f"🚫 ABORT: Roster is {len(final_roster)}/9. Missing data.")
+        print(f"🚫 ABORT: Roster is incomplete ({len(final_roster)}/9).")
         return
 
     # 3. RECRUIT PITCHERS
     true_pitchers = pitchers_df[~pitchers_df['Name'].str.contains('Totals|Rank|Name|HOF', na=False)]
     true_pitchers = true_pitchers[~true_pitchers['Name'].isin(used_names)]
     
-    # Select Starter
+    # Starter
     sp_row = true_pitchers.sample(1).iloc[0]
     sp_name = format_name(sp_row['Name'])
     used_names.add(sp_row['Name'])
     
-    # Select Bullpen
-    rp_pool = true_pitchers[~true_pitchers['Name'].isin(used_names)].sample(min(4, len(true_pitchers)-1))
+    # Bullpen (4 randoms)
+    rp_pool = true_pitchers[~true_pitchers['Name'].isin(used_names)].sample(4)
     rp_names = [format_name(n) for n in rp_pool['Name'].tolist()]
 
     # 4. FORMAT & POST
@@ -125,6 +120,8 @@ def post_lineup():
         client = Client()
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_text)
+        
+        # Only update the game number if the post actually succeeds
         with open(game_file, "w", encoding='utf-8-sig') as f:
             f.write(str(current_game + 1))
         print(f"✅ Success: Game #{current_game} posted!")
