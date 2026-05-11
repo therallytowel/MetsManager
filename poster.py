@@ -4,11 +4,9 @@ import random
 from atproto import Client
 import re
 
-def format_name(name):
-    # Pure cleanup
-    clean = re.sub(r'[*#+?0-9]', '', str(name)).strip()
-    parts = clean.split()
-    return f"{parts[-1]}, {parts[0][0]}" if len(parts) >= 2 else clean
+def clean_name(name):
+    # Removes B-Ref markers like * (active), # (switch), + (HOF)
+    return re.sub(r'[*#+?0-9]', '', str(name)).strip()
 
 def post_lineup():
     game_file = "game_number.txt"
@@ -20,59 +18,67 @@ def post_lineup():
 
     try:
         batters = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
-        # We'll use a curated list of pitchers if the scraper failed
         pitchers = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
+        
+        # Clean the position strings for searching
+        batters['PosClean'] = batters['PosSummary'].astype(str).str.upper()
     except Exception as e:
         print(f"❌ Load Error: {e}")
         return
 
-    # THE POSITIONS (Looking for actual letters: C, 1B, 2B, 3B, SS, LF, CF, RF)
-    slots = [('C', 'C'), ('1B', '1B'), ('2B', '2B'), ('3B', '3B'), ('SS', 'SS'), ('LF', 'LF'), ('CF', 'CF'), ('RF', 'RF')]
-    final_roster = []
-    used = set()
+    # MAPPING: 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF
+    # Also including 'O' for general Outfielders
+    slots = [
+        ('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), ('6', 'SS'), 
+        ('7|O', 'LF'), ('8|O', 'CF'), ('9|O', 'RF')
+    ]
+    
+    final_lineup = []
+    used_players = set()
 
-    for pos_code, pos_label in slots:
-        # Strict matching: PosSummary must contain the letters
-        mask = batters['PosSummary'].astype(str).str.contains(pos_code, na=False)
-        pool = batters[mask & ~batters['Name'].isin(used)]
+    for code, label in slots:
+        # Strict filter: Must contain the specific number OR the 'O' wildcard
+        mask = batters['PosClean'].str.contains(code, na=False)
+        pool = batters[mask & ~batters['Name'].isin(used_players)]
         
         if not pool.empty:
             sel = pool.sample(1).iloc[0]
-            used.add(sel['Name'])
-            final_roster.append({'Name': sel['Name'], 'Pos': pos_label})
+            used_players.add(sel['Name'])
+            # Pull OPS for sorting, default to 0 if missing
+            ops = pd.to_numeric(sel['OPS'], errors='coerce') or 0.000
+            final_lineup.append({'Name': sel['Name'], 'Pos': label, 'OPS': ops})
         else:
-            # NO RANDOS: We stop the script if a position can't be filled legitimately
-            print(f"🚫 DATA GAP: No legitimate '{pos_label}' found in the legends pool. Post cancelled.")
+            print(f"🚫 Critical Error: No legitimate {label} in the 1300-player pool.")
             return
 
-    # DH (One more legend)
-    dh_pool = batters[~batters['Name'].isin(used)]
-    sel_dh = dh_pool.sample(1).iloc[0]
-    final_roster.append({'Name': sel_dh['Name'], 'Pos': 'DH'})
+    # DH: Best remaining player in the pool
+    dh_pool = batters[~batters['Name'].isin(used_players)]
+    dh = dh_pool.sample(1).iloc[0]
+    final_lineup.append({'Name': dh['Name'], 'Pos': 'DH', 'OPS': pd.to_numeric(dh['OPS'], errors='coerce') or 0.0})
 
-    # Pitchers
+    # PITCHERS: 1 Starter, 4 Relievers
     sp = pitchers.sample(1).iloc[0]
     rp = pitchers[pitchers['Name'] != sp['Name']].sample(4)
 
-    # Sort & Post
-    # (Since this is a legends pool, order is randomized for variety)
-    random.shuffle(final_roster)
-    lineup_txt = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(final_roster)]
+    # Lineup construction: Sort by OPS
+    batting_order = sorted(final_lineup, key=lambda x: x['OPS'], reverse=True)
+    lineup_rows = [f"{i+1}. {clean_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(batting_order)]
     
-    mgr = random.choice(['Gil Hodges', 'Davey Johnson', 'Bobby Valentine', 'Casey Stengel'])
-    body = (f"Game #{current_game} (Legends Edition)\n"
-            f"Manager: {mgr}\n\n" + 
-            "\n".join(lineup_txt) + 
-            f"\n\nP: {format_name(sp['Name'])}\n\n"
-            f"Bullpen:\n" + "\n".join([format_name(n['Name']) for _, n in rp.iterrows()]) + 
-            "\n\n#MetsSky #LGM")
+    body = (
+        f"Game #{current_game}\n"
+        f"Manager: {random.choice(['Gil Hodges', 'Davey Johnson', 'Bobby Valentine', 'Yogi Berra'])}\n\n"
+        + "\n".join(lineup_rows) + 
+        f"\n\nP: {clean_name(sp['Name'])}\n\n"
+        f"Bullpen:\n" + "\n".join([clean_name(n['Name']) for _, n in rp.iterrows()]) + 
+        "\n\n#MetsSky #LGM"
+    )
 
     try:
         client = Client()
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(body)
         with open(game_file, "w") as f: f.write(str(current_game + 1))
-        print(f"✅ Success: Posted Game #{current_game} with 100% Legitimate Mets.")
+        print(f"✅ Posted Game #{current_game} using the full franchise history.")
     except Exception as e:
         print(f"❌ Posting Error: {e}")
 
