@@ -1,42 +1,40 @@
-name: Daily Mets Data and Bluesky Post
+name: daily mets data and bluesky post
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '0 16,17,18 * * *' 
-  workflow_dispatch: 
+    - cron: '0 15 * * *' # This runs it automatically at 11am ET every day
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
       - name: Install dependencies
         run: |
-          pip install pandas lxml requests html5lib atproto pytz
+          pip install pandas requests beautifulsoup4 lxml atproto pytz
 
-      - name: Run scraper
+      - name: Run Scraper
         run: python scraper.py
 
-      - name: Post to Bluesky
+      - name: Run Poster
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
         run: python poster.py
 
-      - name: Commit and push changes
+      - name: Commit updated data
         run: |
-          git config --global user.name "MetsBot"
-          git config --global user.email "bot@mets.com"
-          git add *.csv game_number.txt
-          git commit -m "Update game count and daily data" || exit 0
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add game_number.txt mets_batters.csv
+          git commit -m "Update game number and roster data" || echo "No changes to commit"
           git push
