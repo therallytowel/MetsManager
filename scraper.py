@@ -15,25 +15,19 @@ def scrape_mets_history():
         print(f"Scouting ALL {key}...")
         try:
             response = requests.get(url, headers=headers, timeout=20)
-            # Rip the table out of the comments
             html_content = response.text.replace('', '')
             soup = BeautifulSoup(html_content, 'html.parser')
             
             table_id = f"players_career_{key}"
             table = soup.find('table', {'id': table_id})
             
-            if not table:
-                # Career tables sometimes have simpler IDs
-                table = soup.find('table', {'id': key})
-
-            df = pd.read_html(io.StringIO(str(table)))[0]
+            # Use 'lxml' instead of 'html5lib'
+            df = pd.read_html(io.StringIO(str(table)), flavor='lxml')[0]
             
-            # Clean up column names (remove spaces/dots)
             df.columns = [re.sub(r'\W+', '', str(c)) for c in df.columns]
             
-            # Ensure we have a Position column
-            # On the career page, it's usually the last column
             if key == "batters":
+                # Force the last column to be our position summary
                 df.rename(columns={df.columns[-1]: 'PosSummary'}, inplace=True)
 
             df = df.dropna(subset=['Name'])
