@@ -5,17 +5,19 @@ from atproto import Client
 import re
 
 def get_clean_name(name, all_names_list):
-    # Strip B-Ref markers and handle messy encoding
-    raw = str(name).encode('latin1', 'ignore').decode('utf-8', 'ignore') if 'Ã' in str(name) else str(name)
-    raw_clean = re.sub(r'[*#+?0-9]', '', raw).replace('HOF', '').strip()
+    # Fix the encoding symbols (Ã¡ -> á)
+    try:
+        raw = str(name).encode('latin1').decode('utf-8')
+    except:
+        raw = str(name)
     
+    raw_clean = re.sub(r'[*#+?0-9]', '', raw).replace('HOF', '').strip()
     parts = raw_clean.split()
     if not parts: return raw_clean
     
     last_name = parts[-1]
     first_initial = parts[0][0]
 
-    # Check for duplicates in last names
     all_lasts = [re.sub(r'[*#+?0-9]', '', str(n)).strip().split()[-1] for n in all_names_list if isinstance(n, str)]
     if all_lasts.count(last_name) > 1:
         return f"{first_initial}. {last_name}"
@@ -30,18 +32,34 @@ def post_lineup():
             except: pass
 
     try:
-        # 'latin1' is often the culprit for the Ã symbols; switching to it as primary
         batters = pd.read_csv('mets_batters.csv', encoding='latin1')
         pitchers = pd.read_csv('mets_pitchers.csv', encoding='latin1')
         
-        master_names = pd.concat([batters.iloc[:, 1], pitchers.iloc[:, 1]]).tolist()
-
+        # Clean headers immediately
         batters.columns = [str(c).upper().strip() for c in batters.columns]
         pitchers.columns = [str(c).upper().strip() for c in pitchers.columns]
 
-        batters = batters.rename(columns={batters.columns[1]: 'NAME', batters.columns[-1]: 'POS_SEARCH', batters.columns[-2]: 'OPS'})
-        pitchers = pitchers.rename(columns={pitchers.columns[1]: 'NAME', pitchers.columns[-3]: 'G_COL', pitchers.columns[-2]: 'GS_COL', pitchers.columns[-1]: 'POS_SEARCH'})
+        # 🕵️‍♂️ SMART COLUMN LOCATOR
+        # This finds the columns by name instead of guessing their position index
+        def find_col(df, keywords):
+            for col in df.columns:
+                if any(k == col for k in keywords): return col
+            return None
 
+        b_name = find_col(batters, ['NAME', 'PLAYER'])
+        b_pos = find_col(batters, ['POSSUMMARY', 'POS', 'POSITION'])
+        b_ops = find_col(batters, ['OPS'])
+
+        p_name = find_col(pitchers, ['NAME', 'PLAYER'])
+        p_pos = find_col(pitchers, ['POSSUMMARY', 'POS', 'POSITION'])
+        p_g = find_col(pitchers, ['G'])
+        p_gs = find_col(pitchers, ['GS'])
+
+        # Rename for the script logic
+        batters = batters.rename(columns={b_name: 'NAME', b_pos: 'POS_SEARCH', b_ops: 'OPS'})
+        pitchers = pitchers.rename(columns={p_name: 'NAME', p_pos: 'POS_SEARCH', p_g: 'G_COL', p_gs: 'GS_COL'})
+
+        master_names = pd.concat([batters['NAME'], pitchers['NAME']]).tolist()
         batters['POS_SEARCH'] = batters['POS_SEARCH'].astype(str).str.upper()
         pitchers['POS_SEARCH'] = pitchers['POS_SEARCH'].astype(str).str.upper()
         
@@ -49,13 +67,18 @@ def post_lineup():
         print(f"❌ Load Error: {e}")
         return
 
-    # Pitcher/Hitter Logic
-    all_p = pitchers[pitchers['POS_SEARCH'].str.startswith('1', na=False)].copy()
+    # Pitcher Logic
+    all_p = pitchers[pitchers['POS_SEARCH'].str.contains('1', na=False)].copy()
     all_p['G_NUM'] = pd.to_numeric(all_p['G_COL'], errors='coerce').fillna(0)
     all_p['GS_NUM'] = pd.to_numeric(all_p['GS_COL'], errors='coerce').fillna(0)
     
+    # RELIEVER FIX: If GS is 0, they are definitely a reliever.
     starter_pool = all_p[all_p['GS_NUM'] > 0]
     reliever_pool = all_p[all_p['G_NUM'] > all_p['GS_NUM']]
+
+    # Fallback: if reliever pool is empty, just take non-starters
+    if reliever_pool.empty:
+        reliever_pool = all_p[all_p['GS_NUM'] == 0]
 
     hitter_pool = batters[batters['POS_SEARCH'].str.contains(r'[2-9]', na=False)]
     slots = [('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), ('6', 'SS'), ('7|O', 'LF'), ('8|O', 'CF'), ('9|O', 'RF')]
@@ -81,7 +104,12 @@ def post_lineup():
 
     sp_row = starter_pool.sample(1).iloc[0]
     final_rp_pool = reliever_pool[reliever_pool['NAME'] != sp_row['NAME']]
-    rp_rows = final_rp_pool.sample(min(4, len(final_rp_pool)))
+    
+    # Final check to ensure we have relievers
+    if final_rp_pool.empty:
+        rp_rows = all_p.sample(min(4, len(all_p)))
+    else:
+        rp_rows = final_rp_pool.sample(min(4, len(final_rp_pool)))
 
     # Formatting
     order = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
@@ -100,7 +128,6 @@ def post_lineup():
     if len(status_body) > 300:
         status_body = status_body[:297] + "..."
 
-    # LOGGING (To see what happened if it cuts off)
     print("--- POST PREVIEW ---")
     print(status_body)
     print("--------------------")
