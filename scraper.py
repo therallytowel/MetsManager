@@ -2,6 +2,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import io
+import re
 
 def scrape_mets_data():
     url = "https://www.baseball-reference.com/teams/NYM/bat.shtml"
@@ -11,32 +12,32 @@ def scrape_mets_data():
     response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.content, 'html.parser')
     
+    df = pd.DataFrame() # Initialize empty so we don't get the 'referenced before assignment' error
+
     try:
-        # Find the specific 'Standard Batting' table
+        # Look for the table in the clear HTML first
         table = soup.find('table', {'id': 'players_standard_batting'})
         
         if table:
             df = pd.read_html(io.StringIO(str(table)))[0]
         else:
-            # Fallback: Baseball-Ref sometimes comments out tables. Let's find it in the comments.
-            import re
-            comments = soup.find_all(string=lambda text: isinstance(text, pd.Series) or True)
+            # If it's hidden in comments (typical for B-Ref), hunt it down
+            comments = soup.find_all(string=lambda text: isinstance(text, str))
             for comment in comments:
                 if 'id="players_standard_batting"' in comment:
-                    df = pd.read_html(io.StringIO(comment))[0]
+                    # Clean up the comment markers before reading
+                    clean_html = comment.replace('', '')
+                    df = pd.read_html(io.StringIO(clean_html))[0]
                     break
         
-        # Clean columns
-        df.columns = [str(c).strip() for c in df.columns]
-        
-        # Map whatever position column they gave us to 'Pos Summary'
-        possible_pos_cols = ['Pos Summary', 'Pos', 'Positions']
-        for col in possible_pos_cols:
-            if col in df.columns:
-                df.rename(columns={col: 'Pos Summary'}, inplace=True)
-                break
+        if df.empty:
+            print("❌ Failed to find the batting table in HTML or comments.")
+            return
 
-        # Final Cleanup
+        # CLEANING: Remove invisible characters (\xa0) from column names immediately
+        df.columns = [re.sub(r'\s+', ' ', str(c).strip()) for c in df.columns]
+        
+        # Filter out headers and junk
         df = df.dropna(subset=['Name'])
         df = df[~df['Name'].str.contains("Name|Total|Rank", na=False)]
         
