@@ -1,0 +1,35 @@
+name: Post Mets Lineup
+
+on:
+  schedule:
+    - cron: '0 13 * * *' # Runs at 1:00 PM UTC daily
+  workflow_dispatch: # Allows you to click a button to run it whenever you want
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run poster
+        env:
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+        run: python poster.py
+
+      - name: Commit game number update
+        run: |
+          git config --global user.name "MetsBot"
+          git config --global user.email "bot@metssky.com"
+          git add game_number.txt
+          git commit -m "Update game number" || echo "No changes to commit"
+          git push
