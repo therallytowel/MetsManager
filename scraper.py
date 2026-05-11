@@ -1,44 +1,37 @@
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 import io
 
 def scrape_mets_data():
-    # URL for all-time Mets players (Batting)
     url = "https://www.baseball-reference.com/teams/NYM/bat.shtml"
+    headers = {"User-Agent": "Mozilla/5.0"}
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-
-    print("Scouting the Amazins... (Accessing Baseball-Reference)")
+    print("Scouting the Amazins...")
     response = requests.get(url, headers=headers)
     
-    # Extract table from HTML
-    soup = BeautifulSoup(response.content, 'html.parser')
-    table = soup.find('table', {'id': 'players_standard_batting'})
-    
-    if not table:
-        print("Error: Could not find the batting table.")
-        return
-
-    # Convert to DataFrame
-    df = pd.read_html(io.StringIO(str(table)))[0]
-
-    # Clean column names
-    df.columns = [str(c).strip() for c in df.columns]
-    
-    # Filter out junk rows
-    df = df[df['Name'].notna()]
-    df = df[~df['Name'].str.contains("Name|Total|Rank", na=False)]
-
-    # Ensure 'Pos Summary' is the name we use
-    if 'Pos Summary' not in df.columns and 'Pos' in df.columns:
-        df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
-
-    # Save to CSV
-    df.to_csv('mets_batters.csv', index=False, encoding='utf-8-sig')
-    print(f"✅ Success! Created mets_batters.csv with {len(df)} players.")
+    # We use a trick here: read_html can find tables directly from the text
+    # We are looking for the one with 'All-Time' data or the main roster
+    try:
+        all_tables = pd.read_html(io.StringIO(response.text))
+        # Usually the main batting table is the first or second one
+        df = all_tables[0]
+        
+        # Clean column names
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # If 'Pos Summary' is missing, check 'Pos'
+        if 'Pos Summary' not in df.columns and 'Pos' in df.columns:
+            df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
+            
+        # Drop rows that don't have a name
+        df = df.dropna(subset=['Name'])
+        df = df[~df['Name'].str.contains("Name|Total|Rank", na=False)]
+        
+        df.to_csv('mets_batters.csv', index=False, encoding='utf-8-sig')
+        print(f"✅ Success! Found {len(df)} players.")
+        print(f"Columns found: {list(df.columns)}")
+    except Exception as e:
+        print(f"❌ Scraper failed: {e}")
 
 if __name__ == "__main__":
     scrape_mets_data()
