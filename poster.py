@@ -21,26 +21,26 @@ def post_lineup():
             except: pass
 
     try:
+        # Load with utf-8-sig for accents
         batters = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
         pitchers = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
         
-        # Standardize headers to handle the "smashed" or varied names
+        # Clean header whitespace
         batters.columns = [str(c).upper().strip() for c in batters.columns]
         pitchers.columns = [str(c).upper().strip() for c in pitchers.columns]
 
-        # Map columns by position (Index 1=Name, -1=Pos, -2=OPS/GS, -3=G)
+        # Map Batter columns by index
         batters = batters.rename(columns={
             batters.columns[1]: 'NAME', 
             batters.columns[-1]: 'POS_SEARCH',
             batters.columns[-2]: 'OPS'
         })
         
-        # For pitchers, we need Name, G, GS, and PosSummary
-        # Usually: Name(1), G(-3), GS(-2), PosSummary(-1)
+        # Map Pitcher columns by index (1=Name, -3=G, -2=GS, -1=PosSummary)
         pitchers = pitchers.rename(columns={
             pitchers.columns[1]: 'NAME',
-            pitchers.columns[-3]: 'G',
-            pitchers.columns[-2]: 'GS',
+            pitchers.columns[-3]: 'G_COL',
+            pitchers.columns[-2]: 'GS_COL',
             pitchers.columns[-1]: 'POS_SEARCH'
         })
 
@@ -51,18 +51,19 @@ def post_lineup():
         print(f"❌ Load Error: {e}")
         return
 
-    # --- PITCHER LOGIC ---
-    # Ensure they are primary pitchers (starts with 1)
+    # --- FIXED PITCHER LOGIC ---
+    # 1. Filter for primary pitchers
     all_pitchers = pitchers[pitchers['POS_SEARCH'].str.startswith('1', na=False)].copy()
-    all_pitchers['G'] = pd.to_numeric(all_pitchers['G'], errors='coerce') or 0
-    all_pitchers['GS'] = pd.to_numeric(all_pitchers['GS'], errors='coerce') or 0
-
-    # Starter Pool: Anyone who has started at least one game
-    starter_pool = all_pitchers[all_pitchers['GS'] > 0]
     
-    # Reliever Pool: Anyone where appearances (G) > starts (GS)
-    # This captures closers, middle men, and one-game relief wonders
-    reliever_pool = all_pitchers[all_pitchers['G'] > all_pitchers['GS']]
+    # 2. Convert G and GS to numeric safely
+    all_pitchers['G_NUM'] = pd.to_numeric(all_pitchers['G_COL'], errors='coerce').fillna(0)
+    all_pitchers['GS_NUM'] = pd.to_numeric(all_pitchers['GS_COL'], errors='coerce').fillna(0)
+
+    # Starter Pool: Anyone with at least 1 Start
+    starter_pool = all_pitchers[all_pitchers['GS_NUM'] > 0]
+    
+    # Reliever Pool: Only people who appeared in relief (Games > Starts)
+    reliever_pool = all_pitchers[all_pitchers['G_NUM'] > all_pitchers['GS_NUM']]
 
     # --- HITTER LOGIC ---
     real_hitter_pool = batters[batters['POS_SEARCH'].str.contains(r'[2-9]', na=False)]
@@ -83,17 +84,16 @@ def post_lineup():
     dh_pool = real_hitter_pool[~real_hitter_pool['NAME'].isin(used_names)]
     if not dh_pool.empty:
         dh_sel = dh_pool.sample(1).iloc[0]
-        final_roster.append({'Name': dh_sel['Name'], 'Pos': 'DH', 'Val': pd.to_numeric(dh_sel['OPS'], errors='coerce') or 0.0})
+        final_roster.append({'Name': dh_sel['NAME'], 'Pos': 'DH', 'Val': pd.to_numeric(dh_sel['OPS'], errors='coerce') or 0.0})
 
     # --- SELECT PITCHERS ---
     sp_row = starter_pool.sample(1).iloc[0]
     
-    # Ensure RPs are actually relievers and not the guy we just picked to start
+    # Filter for relievers, excluding the current starter
     final_rp_pool = reliever_pool[reliever_pool['NAME'] != sp_row['NAME']]
     
-    # Sample 4 relievers (or fewer if the pool is somehow small)
-    num_rp = min(4, len(final_rp_pool))
-    rp_rows = final_rp_pool.sample(num_rp)
+    # Sample up to 4 relievers
+    rp_rows = final_rp_pool.sample(min(4, len(final_rp_pool)))
 
     # --- FORMAT & POST ---
     order = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
@@ -115,7 +115,7 @@ def post_lineup():
         client.login(os.environ.get('BSKY_HANDLE'), os.environ.get('BSKY_PASSWORD'))
         client.send_post(status_body)
         with open(game_file, "w") as f: f.write(str(current_game + 1))
-        print(f"✅ Posted Game #{current_game} with a TRUE Bullpen.")
+        print(f"✅ Success! Game #{current_game} posted with a true Bullpen.")
     except Exception as e:
         print(f"❌ Bluesky Error: {e}")
 
