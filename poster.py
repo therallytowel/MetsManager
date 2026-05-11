@@ -5,9 +5,11 @@ from atproto import Client
 import re
 
 def format_name(full_name):
-    # Removes HOF (+), Active (*), and other B-Ref markers
+    """Cleans B-Ref markers and returns 'Last, F.' format."""
+    # Remove HOF (+), Active (*), and digits
     clean_name = re.sub(r'[*#+?0-9]', '', str(full_name)).replace('HOF', '').strip()
-    # Logic for "Last Name, First Initial"
+    # Remove bracketed info or nicknames in quotes
+    clean_name = re.sub(r'[\(\"\'].*?[\)\"\']', '', clean_name).strip()
     parts = clean_name.split()
     if len(parts) >= 2:
         return f"{parts[-1]}, {parts[0][0]}"
@@ -36,35 +38,37 @@ def post_lineup():
     used_names = set()
 
     for code, pos_label in field_needs:
-        # Search the career position summary for the specific code
-        mask = batters_df[pos_col].astype(str).str.contains(code, na=False)
+        # THE FIX: Look for the specific number OR the generic 'OF' for outfield spots
+        if code in ['7', '8', '9']:
+            mask = (batters_df[pos_col].astype(str).str.contains(code, na=False)) | \
+                   (batters_df[pos_col].astype(str).str.fullmatch('OF', na=False))
+        else:
+            mask = batters_df[pos_col].astype(str).str.contains(code, na=False)
+            
         pool = batters_df[mask & ~batters_df['Name'].isin(used_names)]
-        
-        # Outfield Fallback
-        if pool.empty and code in ['7', '8', '9']:
-            mask = batters_df[pos_col].astype(str).str.contains('OF', na=False)
-            pool = batters_df[mask & ~batters_df['Name'].isin(used_names)]
 
         if not pool.empty:
             sel = pool.sample(1).iloc[0]
             used_names.add(sel['Name'])
-            # Use Career OPS for lineup sorting
-            val = pd.to_numeric(sel['OPS'], errors='coerce') or 0
+            # Career OPS for sorting the lineup
+            val = pd.to_numeric(sel['OPS'], errors='coerce') or 0.000
             final_roster.append({'Name': sel['Name'], 'Pos': pos_label, 'Val': val})
         else:
             print(f"🚫 Failed to find a historical {pos_label}. Aborting.")
             return
 
-    # 2. RECRUIT DH (Any batter not already picked)
+    # 2. RECRUIT DH (Best remaining hitter)
     dh_pool = batters_df[~batters_df['Name'].isin(used_names)]
     sel_dh = dh_pool.sample(1).iloc[0]
-    final_roster.append({'Name': sel_dh['Name'], 'Pos': 'DH', 'Val': pd.to_numeric(sel_dh['OPS'], errors='coerce') or 0})
+    final_roster.append({'Name': sel_dh['Name'], 'Pos': 'DH', 'Val': pd.to_numeric(sel_dh['OPS'], errors='coerce') or 0.000})
 
     # 3. RECRUIT PITCHERS
     sp_row = pitchers_df.sample(1).iloc[0]
-    rp_rows = pitchers_df[pitchers_df['Name'] != sp_row['Name']].sample(4)
+    used_names.add(sp_row['Name'])
+    rp_rows = pitchers_df[~pitchers_df['Name'].isin(used_names)].sample(4)
 
     # 4. FORMAT & POST
+    # Sort lineup by OPS (Val) descending
     lineup_sorted = sorted(final_roster, key=lambda x: x['Val'], reverse=True)
     lineup_text = [f"{i+1}. {format_name(p['Name'])} - {p['Pos']}" for i, p in enumerate(lineup_sorted)]
     
