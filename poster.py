@@ -5,20 +5,38 @@ from atproto import Client, models
 import re
 
 def get_clean_name(name, all_names_list):
+    """Deep scrub for complex encoding artifacts and Smart Name logic."""
     if not isinstance(name, str): return str(name)
+    
+    # Target the specific 'ÃƒÂ' clusters seen in Game #11
     replacements = {
-        'ÃƒÂ­': 'í', 'ÃƒÂ±': 'ñ', 'ÃƒÂ³': 'ó', 'ÃƒÂ¡': 'á', 'ÃƒÂ©': 'é', 
-        'ÃƒÂº': 'ú', 'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ã³': 'ó', 
-        'Ãº': 'ú', 'Ã±': 'ñ', 'Ã‘': 'Ñ', 'Ã': 'Í', 'Ã': 'Á'
+        'ÃƒÂ±': 'ñ', 'ÃƒÂ­': 'í', 'ÃƒÂ³': 'ó', 'ÃƒÂ¡': 'á', 'ÃƒÂ©': 'é', 
+        'ÃƒÂº': 'ú', 'Ã±': 'ñ', 'Ã­': 'í', 'Ã³': 'ó', 'Ã¡': 'á', 
+        'Ã©': 'é', 'Ãº': 'ú', 'Ã‘': 'Ñ', 'Ã': 'Í', 'Ã': 'Á'
     }
+    
     for bad, good in replacements.items():
         name = name.replace(bad, good)
+    
+    # Secondary pass for any remaining standard double-encoding
+    if 'Ã' in name:
+        try:
+            name = name.encode('latin1').decode('utf-8')
+        except:
+            pass
+    
+    # Clean up standard baseball-reference symbols (*, #, +, etc.)
     raw_clean = re.sub(r'[*#+?0-9]', '', name).replace('HOF', '').strip()
+    
     parts = raw_clean.split()
     if not parts: return raw_clean
     last_name = parts[-1]
+    
+    # Smart Name: Check for duplicate last names to add First Initial
     all_lasts = [re.sub(r'[*#+?0-9]', '', str(n)).strip().split()[-1] for n in all_names_list if isinstance(n, str) and n.strip()]
-    return f"{parts[0][0]}. {last_name}" if all_lasts.count(last_name) > 1 else last_name
+    if all_lasts.count(last_name) > 1:
+        return f"{parts[0][0]}. {last_name}"
+    return last_name
 
 def post_lineup():
     game_file = "game_number.txt"
@@ -56,31 +74,30 @@ def post_lineup():
     sp_row = all_p[all_p['GS_NUM'] > 0].sample(1).iloc[0]
     rp_rows = all_p[all_p['NAME'] != sp_row['NAME']].sample(min(4, len(all_p)-1))
 
-    # 2. Hitter Selection (The Roster Search)
+    # 2. Hitter Selection (Iterative Search)
     h_pool = batters[~batters['NAME'].isin(pitcher_names_set)].copy()
     h_pool['PRIMARY_POS'] = h_pool['POS_SEARCH'].astype(str).str[0]
     
     slots = [('2', 'C'), ('3', '1B'), ('4', '2B'), ('5', '3B'), ('6', 'SS'), ('7', 'LF'), ('8', 'CF'), ('9', 'RF')]
     starters = []
-    used_names = {sp_row['NAME']} # Ensure pitcher isn't selected to hit
+    used_names = {sp_row['NAME']} 
 
     for code, label in slots:
-        # Shuffle the available players and find the first one who fits
         possible_fits = h_pool[~h_pool['NAME'].isin(used_names)].sample(frac=1)
-        
         selected_player = None
-        # Try Primary Match
+        
+        # Priority 1: Find a Primary position match
         for _, p in possible_fits.iterrows():
             if str(p['PRIMARY_POS']) == code:
                 selected_player = p; break
         
-        # If no primary found, look for any experience there
+        # Priority 2: Find a Secondary position match
         if selected_player is None:
             for _, p in possible_fits.iterrows():
                 if code in str(p['POS_SEARCH']):
                     selected_player = p; break
         
-        # If STILL none (extremely rare), take the next available athlete
+        # Priority 3: Emergency Fallback (Next athlete up)
         if selected_player is None:
             selected_player = possible_fits.iloc[0]
 
@@ -92,7 +109,7 @@ def post_lineup():
             'G': pd.to_numeric(selected_player['G_COL'], errors='coerce') or 0.0
         })
 
-    # DH from anyone left
+    # Fill the DH spot
     dh_pool = h_pool[~h_pool['NAME'].isin(used_names)]
     if not dh_pool.empty:
         sel = dh_pool.sample(1).iloc[0]
@@ -124,10 +141,11 @@ def post_lineup():
 
     l_rows = [f"{i+1} {get_clean_name(p['Name'], master_names)} {p['Pos']}" for i, p in enumerate(final_order)]
 
-    # 4. Bench
+    # 4. Bench Selection
     bench_pool = h_pool[~h_pool['NAME'].isin(used_names)]
     bench_names = [get_clean_name(n['NAME'], master_names) for _, n in bench_pool.sample(min(5, len(bench_pool))).iterrows()]
 
+    # 5. Formatting & Posting
     mgr = random.choice(['Hodges', 'Johnson', 'Valentine', 'Berra', 'Collins', 'Mendoza'])
     status_body = f"Game #{current_game}\nMgr: {mgr}\n\n" + "\n".join(l_rows) + f"\n\nP: {get_clean_name(sp_row['NAME'], master_names)}\nBullpen: " + ", ".join([get_clean_name(n['NAME'], master_names) for _, n in rp_rows.iterrows()])
     bench_body = f"Bench: {', '.join(bench_names)}"
@@ -139,8 +157,9 @@ def post_lineup():
         root = models.ComAtprotoRepoStrongRef.Main(cid=main_p.cid, uri=main_p.uri)
         client.send_post(text=bench_body, reply_to=models.AppBskyFeedPost.ReplyRef(parent=root, root=root))
         with open(game_file, "w") as f: f.write(str(current_game + 1))
-        print(f"✅ Posted Successfully.")
-    except Exception as e: print(f"❌ Error: {e}")
+        print(f"✅ Game #{current_game} posted successfully.")
+    except Exception as e: 
+        print(f"❌ Bluesky Error: {e}")
 
 if __name__ == "__main__":
     post_lineup()
