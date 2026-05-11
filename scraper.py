@@ -9,27 +9,37 @@ def scrape_mets_data():
     print("Scouting the Amazins...")
     response = requests.get(url, headers=headers)
     
-    # We use a trick here: read_html can find tables directly from the text
-    # We are looking for the one with 'All-Time' data or the main roster
     try:
+        # 1. Grab the table
         all_tables = pd.read_html(io.StringIO(response.text))
-        # Usually the main batting table is the first or second one
         df = all_tables[0]
         
-        # Clean column names
+        # 2. Clean the column names
         df.columns = [str(c).strip() for c in df.columns]
         
-        # If 'Pos Summary' is missing, check 'Pos'
-        if 'Pos Summary' not in df.columns and 'Pos' in df.columns:
-            df.rename(columns={'Pos': 'Pos Summary'}, inplace=True)
+        # 3. Target the Position Summary
+        # B-Ref stores position history in 'Pos Summary' or 'Pos'
+        pos_key = 'Pos Summary' if 'Pos Summary' in df.columns else 'Pos'
+        
+        # 4. THE FIX: Explicitly tag Outfielders
+        # We look for 7, 8, or 9 in the summary and add 'LF', 'CF', 'RF' to the text
+        def clarify_pos(row):
+            pos_str = str(row[pos_key])
+            output = pos_str
+            if '7' in pos_str: output += " LF"
+            if '8' in pos_str: output += " CF"
+            if '9' in pos_str: output += " RF"
+            return output
+
+        df['Pos Summary'] = df.apply(clarify_pos, axis=1)
             
-        # Drop rows that don't have a name
+        # 5. Filter out the noise
         df = df.dropna(subset=['Name'])
         df = df[~df['Name'].str.contains("Name|Total|Rank", na=False)]
         
+        # 6. Save it
         df.to_csv('mets_batters.csv', index=False, encoding='utf-8-sig')
-        print(f"✅ Success! Found {len(df)} players.")
-        print(f"Columns found: {list(df.columns)}")
+        print(f"✅ Success! Scoped {len(df)} players with verified positions.")
     except Exception as e:
         print(f"❌ Scraper failed: {e}")
 
