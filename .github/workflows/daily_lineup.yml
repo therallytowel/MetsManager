@@ -1,6 +1,45 @@
-- name: Run poster
+name: Post Mets Lineup
+
+on:
+  schedule:
+    # This runs the bot daily at 1:00 PM UTC (9:00 AM ET)
+    - cron: '0 13 * * *'
+  # This lets you run it manually by clicking a button in the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    # This gives GitHub permission to write the updated game number to your repo
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install atproto pandas
+
+      - name: Run poster
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
-        # Remove the 'python scraper.py' line. Only keep this one:
+        # Straight to the point: no scraper, just the poster
         run: python poster.py
+
+      - name: Commit and push if game number changed
+        run: |
+          git config --global user.name "MetsManagerBot"
+          git config --global user.email "bot@metssky.com"
+          git add game_number.txt
+          # Only commit if the file actually changed to avoid errors
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update game number to $(cat game_number.txt)" && git push)
