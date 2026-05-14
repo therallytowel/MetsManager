@@ -2,11 +2,12 @@ name: Mets Mystery Manager Daily Lineup
 
 on:
   schedule:
-    # 17:07 UTC is 1:07 PM EDT (Stamford/Fairfield Time)
-    # This avoids the "top of the hour" rush where GitHub drops jobs.
-    - cron: '07 17 * * *'
+    # This uses the new 2026 timezone support to fire at 1:13 PM Stamford time.
+    # The :13 avoids the rush-hour delays on GitHub's servers.
+    - cron: '13 13 * * *'
+      timezone: 'America/New_York'
   
-  # This allows you to manually "smack the button" if the schedule fails
+  # Keeps the manual button active just in case
   workflow_dispatch:
 
 jobs:
@@ -16,6 +17,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # Ensures we have the environment for the bot
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
