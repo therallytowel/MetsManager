@@ -9,7 +9,7 @@ def solve_defense(players, required_positions):
     current_player = players[0]
     remaining_players = players[1:]
     
-    # Check eligibility based on the list of positions we identified earlier
+    # Check eligibility based on the aggregated 'EligiblePositions' from the merge
     eligible_pos = [p for p in required_positions if p in current_player['EligiblePositions']]
     if 'DH' in required_positions:
         eligible_pos.append('DH')
@@ -23,72 +23,71 @@ def solve_defense(players, required_positions):
     return None
 
 def generate_lineup():
-    # 1. Load the specific history file
-    filename = 'Mets_Positional_History - Mets_Positional_History.csv'
-    df = pd.read_csv(filename)
+    # 1. LOAD ALL THREE FILES
+    pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv')
+    bat_df = pd.read_csv('mets_batters.csv')
     pitchers_df = pd.read_csv('mets_pitchers.csv')
     
-    # 2. Identify Position Columns
-    # We look for the exact abbreviations you provided
+    # 2. STANDARDIZE COLUMNS
+    pos_df.columns = [c.strip() for c in pos_df.columns]
+    bat_df.columns = [c.strip() for c in bat_df.columns]
+    pitchers_df.columns = [c.strip() for c in pitchers_df.columns]
+    
     pos_cols = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'P']
-    
-    # Standardize Column Names (Handling potential spaces from the merge)
-    df.columns = [c.strip() for c in df.columns]
 
-    # 3. CLEANUP
-    df = df[df['Player'].notna()]
-    df = df[df['Player'].astype(str).str.lower() != 'player']
-
-    # Convert position columns to numeric (filling NaNs with 0)
+    # 3. PROCESS POSITIONAL ELIGIBILITY
+    pos_df = pos_df[pos_df['Player'].notna() & (pos_df['Player'].astype(str).str.lower() != 'player')]
     for p_col in pos_cols:
-        if p_col in df.columns:
-            df[p_col] = pd.to_numeric(df[p_col], errors='coerce').fillna(0)
+        if p_col in pos_df.columns:
+            pos_df[p_col] = pd.to_numeric(pos_df[p_col], errors='coerce').fillna(0)
 
-    # 4. AGGREGATE ELIGIBILITY
-    # We sum the games at each position across all years for every player
-    agg_dict = {p: 'sum' for p in pos_cols if p in df.columns}
-    # Add stats (taking the max/peak performance found in the data)
-    agg_dict.update({'OPS': 'max', 'OBP': 'max', 'SLG': 'max'})
+    # Aggregate by Player to capture all positions played across all years
+    pos_master = pos_df.groupby('Player').agg({p: 'sum' for p in pos_cols if p in pos_df.columns}).reset_index()
     
-    player_master = df.groupby('Player').agg(agg_dict).reset_index()
-
-    # Create a list of positions where the player has > 0 games played
     def get_eligible_list(row):
         return [p for p in pos_cols if p in row and row[p] > 0]
+    pos_master['EligiblePositions'] = pos_master.apply(get_eligible_list, axis=1)
 
-    player_master['EligiblePositions'] = player_master.apply(get_eligible_list, axis=1)
+    # 4. PROCESS BATTING STATS
+    # Rename 'Name' to 'Player' to facilitate the merge
+    bat_df = bat_df.rename(columns={'Name': 'Player'})
+    for stat in ['OBP', 'OPS', 'SLG']:
+        if stat in bat_df.columns:
+            bat_df[stat] = pd.to_numeric(bat_df[stat], errors='coerce').fillna(0)
 
-    # 5. DRAFT & ORDERING
-    # Ensure stats are numeric for the lineup strategy
-    for col in ['OPS', 'OBP', 'SLG']:
-        player_master[col] = pd.to_numeric(player_master[col], errors='coerce').fillna(0)
+    # 5. MERGE BATTERS WITH POSITIONS
+    # This creates a pool of players who have both stats and defensive data
+    master_batters = pd.merge(pos_master, bat_df[['Player', 'OBP', 'OPS', 'SLG']], on='Player', how='inner')
 
-    sampled_players = player_master.sample(9).to_dict('records')
+    # 6. DRAFT & LINEUP STRATEGY
+    sampled_players = master_batters.sample(9).to_dict('records')
     lineup = [None] * 9
-    pool = sorted(sampled_players, key=lambda x: x.get('OPS', 0), reverse=True)
+    pool = sorted(sampled_players, key=lambda x: x['OPS'], reverse=True)
     
-    lineup[0] = max(pool, key=lambda x: x.get('OBP', 0)) 
+    lineup[0] = max(pool, key=lambda x: x['OBP']) # Leadoff (OBP)
     pool.remove(lineup[0])
-    lineup[3] = max(pool, key=lambda x: x.get('SLG', 0)) 
+    lineup[3] = max(pool, key=lambda x: x['SLG']) # Cleanup (Power)
     pool.remove(lineup[3])
-    lineup[1] = max(pool, key=lambda x: x.get('OPS', 0)) 
+    lineup[1] = max(pool, key=lambda x: x['OPS']) # #2 (Overall)
     pool.remove(lineup[1])
     
     remaining_slots = [2, 4, 5, 6, 7, 8]
-    pool = sorted(pool, key=lambda x: x.get('OPS', 0), reverse=True)
+    pool = sorted(pool, key=lambda x: x['OPS'], reverse=True)
     for i, slot in enumerate(remaining_slots):
         lineup[slot] = pool[i]
 
-    # 6. ASSIGN POSITIONS
+    # 7. ASSIGN DEFENSE
     required_pos = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH']
     defense_map = solve_defense(lineup, required_pos)
     
     if not defense_map:
         return generate_lineup()
 
-    # 7. PITCHING
+    # 8. PROCESS PITCHING (Starters vs Relievers)
     pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
+    # A 'Starter' is anyone with 5+ Games Started in their dataset
     starter = pitchers_df[pitchers_df['GS'] >= 5].sample(1).iloc[0]
+    # Relievers are chosen from the remaining pool
     bullpen = pitchers_df[pitchers_df['Name'] != starter['Name']].sample(4).to_dict('records')
 
     return lineup, defense_map, starter, bullpen
@@ -97,7 +96,7 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bullpen = generate_lineup()
         
-        post_text = "Mets Mystery Manager - Game #4\nAll-Time Roster Selection\n\n"
+        post_text = "Mets Mystery Manager - Game #4\n\n"
         for i, player in enumerate(lineup):
             name = player['Player']
             post_text += f"{i+1}. {name} ({defense[name]})\n"
