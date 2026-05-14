@@ -4,23 +4,20 @@ from atproto import Client
 import os
 
 def solve_defense(players, required_positions):
-    """
-    A backtracking algorithm to ensure every player is assigned a 
-    legal position based on their 'PosSummary' string.
-    """
     if not players:
         return {}
 
     current_player = players[0]
     remaining_players = players[1:]
     
-    # Everyone is eligible to DH
-    eligible_pos = [p for p in required_positions if p in current_player['PosSummary'] or p == 'DH']
+    # Treat the PosSummary as a string to avoid the 'float' error
+    summary = str(current_player.get('PosSummary', ''))
     
-    random.shuffle(eligible_pos) # Add variety to assignments
+    # Everyone is eligible to DH
+    eligible_pos = [p for p in required_positions if p in summary or p == 'DH']
+    random.shuffle(eligible_pos)
 
     for pos in eligible_pos:
-        # Recursive check to see if this assignment allows for a valid full lineup
         result = solve_defense(remaining_players, [p for p in required_positions if p != pos])
         if result is not None:
             result[current_player['Name']] = pos
@@ -28,66 +25,61 @@ def solve_defense(players, required_positions):
     return None
 
 def generate_lineup():
-    # Load Data
     batters_df = pd.read_csv('mets_batters.csv')
     pitchers_df = pd.read_csv('mets_pitchers.csv')
     
-    # 1. Draft the Talent: Pick 9 random unique batters
+    # Clean the data: Treat empty stats as 0 and empty positions as blank strings
+    for col in ['OPS', 'OBP', 'SLG']:
+        batters_df[col] = pd.to_numeric(batters_df[col], errors='coerce').fillna(0)
+    batters_df['PosSummary'] = batters_df['PosSummary'].fillna('')
+
+    # Draft 9 unique batters
     sampled_batters = batters_df.sample(9).to_dict('records')
     
-    # 2. Set Batting Order based on Strategy (OBP for leadoff, SLG for cleanup, etc.)
-    # We sort by various stats to find the best fit for specific holes
+    # Set Batting Order by Strategy
     lineup = [None] * 9
+    pool = sorted(sampled_batters, key=lambda x: x['OPS'], reverse=True)
     
-    # Sort a copy to pick specialists
-    pool = sorted(sampled_batters, key=lambda x: x.get('OPS', 0), reverse=True)
-    
-    # #1 Leadoff: Highest OBP in the sampled 9
-    lineup[0] = max(pool, key=lambda x: x.get('OBP', 0))
+    lineup[0] = max(pool, key=lambda x: x['OBP'])  # #1 Leadoff (OBP)
     pool.remove(lineup[0])
     
-    # #4 Cleanup: Highest SLG remaining
-    lineup[3] = max(pool, key=lambda x: x.get('SLG', 0))
+    lineup[3] = max(pool, key=lambda x: x['SLG'])  # #4 Cleanup (SLG)
     pool.remove(lineup[3])
     
-    # #2 The Best Hitter: Highest remaining OPS
-    lineup[1] = max(pool, key=lambda x: x.get('OPS', 0))
+    lineup[1] = max(pool, key=lambda x: x['OPS'])  # #2 Best Overall (OPS)
     pool.remove(lineup[1])
     
-    # Fill 3, 5, 6, 7, 8, 9 with remaining talent by descending OPS
-    remaining_indices = [2, 4, 5, 6, 7, 8]
-    pool = sorted(pool, key=lambda x: x.get('OPS', 0), reverse=True)
-    for i, idx in enumerate(remaining_indices):
-        lineup[idx] = pool[i]
+    # Fill remaining spots (3, 5, 6, 7, 8, 9) by descending OPS
+    remaining_slots = [2, 4, 5, 6, 7, 8]
+    pool = sorted(pool, key=lambda x: x['OPS'], reverse=True)
+    for i, slot in enumerate(remaining_slots):
+        lineup[slot] = pool[i]
 
-    # 3. Defensive Assignment (The Positional Puzzle)
-    # This ensures Baty never catches, but can play 3B/OF/DH.
+    # Assign Defense based on PosSummary eligibility
     pos_list = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH']
     defense_map = solve_defense(lineup, pos_list)
     
-    # If the random 9 literally cannot field a team (e.g., 9 DHs), try again
+    # If this specific 9-man group can't field a team, pull a new 9
     if not defense_map:
         return generate_lineup()
 
-    # 4. Pitching Staff: 1 Starter (high GS) and 4 Bullpen (high G/GF)
-    starter = pitchers_df[pitchers_df['GS'] > 5].sample(1).iloc[0]
-    bullpen = pitchers_df[pitchers_df['Name'] != starter['Name']].sample(4).tolist()
+    # Pitcher Logic: Require at least 5 Games Started for the starter
+    pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
+    starter = pitchers_df[pitchers_df['GS'] >= 5].sample(1).iloc[0]
+    bullpen = pitchers_df[pitchers_df['Name'] != starter['Name']].sample(4).to_dict('records')
 
     return lineup, defense_map, starter, bullpen
 
 def post_to_bluesky():
     lineup, defense, starter, bullpen = generate_lineup()
     
-    # Formatting the post
     post_text = "Mets Mystery Manager - Daily Lineup\n\n"
     for i, player in enumerate(lineup):
-        pos = defense[player['Name']]
-        post_text += f"{i+1}. {player['Name']} {pos}\n"
+        post_text += f"{i+1}. {player['Name']} {defense[player['Name']]}\n"
     
     post_text += f"\nP: {starter['Name']}\n"
     post_text += f"Bullpen: {', '.join([p['Name'] for p in bullpen])}"
 
-    # Bluesky Login
     client = Client()
     client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
     client.send_post(post_text)
