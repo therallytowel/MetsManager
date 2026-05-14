@@ -71,21 +71,29 @@ def generate_lineup():
     starter_p = pitchers_df[pitchers_df['GS'] >= 5].sample(1).iloc[0]
     bullpen = pitchers_df[pitchers_df['Name'] != starter_p['Name']].sample(4).to_dict('records')
 
-    return lineup, defense_map, starter_p, bullpen, bench
+    # COMPLETE METS MANAGER POOL
+    managers = [
+        "Stengel", "Westrum", "Hodges", "Berra", "Frazier", "McMillan", "Torre", "Bamberger", 
+        "Johnson", "Harrelson", "Cubbage", "Torborg", "Green", "Valentine", "Howe", "Randolph", 
+        "Manuel", "Collins", "Callaway", "Beltrán", "Rojas", "Showalter", "Mendoza"
+    ]
+    mgr = random.choice(managers)
+
+    return lineup, defense_map, starter_p, bullpen, bench, mgr
 
 def post_to_bluesky():
     try:
-        lineup, defense, starter, bullpen, bench = generate_lineup()
+        lineup, defense, starter, bullpen, bench, mgr = generate_lineup()
         
-        # 1. MAIN POST (Lineup + Starter only)
-        post_text = "Game #4\n\n"
+        # MAIN POST (Yesterday's Style)
+        post_text = f"Game #4\nMgr: {mgr}\n\n"
         for i, p in enumerate(lineup):
             name = p['Player']
             post_text += f"{i+1} {name} {defense[name]}\n"
         
         post_text += f"\nP: {starter['Name']}"
 
-        # 2. REPLY POST (Bullpen + Bench)
+        # REPLY POST (Bullpen + Bench)
         bp_names = ", ".join([p['Name'] for p in bullpen])
         bench_names = ", ".join([b['Player'] for b in bench])
         reply_text = f"Bullpen: {bp_names}\n\nBench: {bench_names}"
@@ -93,10 +101,7 @@ def post_to_bluesky():
         client = Client()
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         
-        # Send main post
         root_post = client.send_post(post_text)
-        
-        # Send reply
         parent_ref = {'cid': root_post.cid, 'uri': root_post.uri}
         client.send_post(reply_text, reply_to={'root': parent_ref, 'parent': parent_ref})
 
