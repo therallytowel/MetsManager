@@ -10,7 +10,6 @@ def solve_defense(players, required_positions):
     remaining_players = players[1:]
     eligible_pos = [p for p in required_positions if p in current_player['EligiblePositions']]
     
-    # Universal DH Logic: Every player is DH eligible, but they cannot be a pitcher
     if 'DH' in required_positions:
         eligible_pos.append('DH')
     
@@ -23,19 +22,17 @@ def solve_defense(players, required_positions):
     return None
 
 def generate_lineup():
-    # 1. Load data from all three consolidated sources
-    pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv')
-    bat_df = pd.read_csv('mets_batters.csv')
-    pitchers_df = pd.read_csv('mets_pitchers.csv')
+    # Load all three files with UTF-8 to handle special characters
+    pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv', encoding='utf-8')
+    bat_df = pd.read_csv('mets_batters.csv', encoding='utf-8')
+    pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8')
     
     pos_df.columns = [c.strip() for c in pos_df.columns]
     bat_df.columns = [c.strip() for c in bat_df.columns]
     pitchers_df.columns = [c.strip() for c in pitchers_df.columns]
     
-    # 2. Define standard fielding positions (excluding P and DH for the field pool)
     field_pos_cols = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF']
 
-    # 3. Process Position Players: Aggregate all-time eligibility
     pos_df = pos_df[pos_df['Player'].notna() & (pos_df['Player'].astype(str).str.lower() != 'player')]
     for p_col in field_pos_cols:
         if p_col in pos_df.columns:
@@ -46,23 +43,20 @@ def generate_lineup():
         return [p for p in field_pos_cols if p in row and row[p] > 0]
     pos_master['EligiblePositions'] = pos_master.apply(get_eligible_list, axis=1)
 
-    # 4. Merge with Batting Stats
     bat_df = bat_df.rename(columns={'Name': 'Player'})
     for stat in ['OBP', 'OPS', 'SLG']:
         bat_df[stat] = pd.to_numeric(bat_df[stat], errors='coerce').fillna(0)
     
     master_batters = pd.merge(pos_master, bat_df[['Player', 'OBP', 'OPS', 'SLG']], on='Player', how='inner')
 
-    # 5. THE ROLE FIREWALL: Remove anyone who appears in the pitching file from the hitting pool
+    # Universal DH Logic: Strict separation of pitchers and hitters
     pitcher_names = pitchers_df['Name'].unique().tolist()
     clean_batter_pool = master_batters[~master_batters['Player'].isin(pitcher_names)]
 
-    # 6. Draft 14 non-pitchers for the Lineup and Bench
     all_sampled = clean_batter_pool.sample(14).to_dict('records')
     starters = all_sampled[:9]
     bench = all_sampled[9:]
 
-    # 7. Lineup Strategy based on Peak Stats
     pool = sorted(starters, key=lambda x: x['OPS'], reverse=True)
     lineup = [None] * 9
     lineup[0] = max(pool, key=lambda x: x['OBP'])
@@ -77,13 +71,11 @@ def generate_lineup():
     for i, slot in enumerate(rem_slots):
         lineup[slot] = pool[i]
 
-    # Assign Defense (Universal DH Rule applied inside solve_defense)
     required_pos = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH']
     defense_map = solve_defense(lineup, required_pos)
     if not defense_map:
         return generate_lineup()
 
-    # 8. Pitching: Draft only from the pitching file (excluding any cross-pool names)
     pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
     batter_names = [p['Player'] for p in all_sampled]
     clean_pitcher_pool = pitchers_df[~pitchers_df['Name'].isin(batter_names)]
@@ -91,10 +83,14 @@ def generate_lineup():
     starter_p = clean_pitcher_pool[clean_pitcher_pool['GS'] >= 5].sample(1).iloc[0]
     bullpen = clean_pitcher_pool[clean_pitcher_pool['Name'] != starter_p['Name']].sample(4).to_dict('records')
 
-    # 9. Random Manager Selection
-    managers = ["Stengel", "Westrum", "Hodges", "Berra", "Frazier", "McMillan", "Torre", "Bamberger", 
-                "Johnson", "Harrelson", "Cubbage", "Torborg", "Green", "Valentine", "Howe", "Randolph", 
-                "Manuel", "Collins", "Callaway", "Beltrán", "Rojas", "Showalter", "Mendoza"]
+    # Full Historical Manager Pool with Full Names
+    managers = [
+        "Casey Stengel", "Wes Westrum", "Gil Hodges", "Yogi Berra", "Roy McMillan", 
+        "Joe Frazier", "Joe Torre", "George Bamberger", "Frank Howard", "Davey Johnson", 
+        "Bud Harrelson", "Mike Cubbage", "Jeff Torborg", "Dallas Green", "Bobby Valentine", 
+        "Art Howe", "Willie Randolph", "Jerry Manuel", "Terry Collins", "Mickey Callaway", 
+        "Carlos Beltrán", "Luis Rojas", "Buck Showalter", "Carlos Mendoza"
+    ]
     mgr = random.choice(managers)
 
     return lineup, defense_map, starter_p, bullpen, bench, mgr
@@ -103,12 +99,14 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bullpen, bench, mgr = generate_lineup()
         
+        # MAIN POST (Yesterday's Style with Full Manager Name)
         post_text = f"Game #4\nMgr: {mgr}\n\n"
         for i, p in enumerate(lineup):
             name = p['Player']
             post_text += f"{i+1} {name} {defense[name]}\n"
         post_text += f"\nP: {starter['Name']}"
 
+        # REPLY POST (Bullpen + Bench)
         bp_names = ", ".join([p['Name'] for p in bullpen])
         bench_names = ", ".join([b['Player'] for b in bench])
         reply_text = f"Bullpen: {bp_names}\n\nBench: {bench_names}"
