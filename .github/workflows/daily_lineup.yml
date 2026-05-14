@@ -2,17 +2,18 @@ name: Mets Mystery Manager Daily Lineup
 
 on:
   schedule:
-    # 17:00 UTC is 1:00 PM EDT (Stamford/Fairfield Time)
-    # GitHub Actions uses UTC math: 13:00 + 4 hours = 17:00
+    # 17:07 UTC is 1:07 PM EDT (Stamford/Fairfield Time)
+    # This avoids the "top of the hour" rush where GitHub drops jobs.
     - cron: '07 17 * * *'
-  workflow_dispatch: # Allows you to trigger it manually from the Actions tab
+  
+  # This allows you to manually "smack the button" if the schedule fails
+  workflow_dispatch:
 
 jobs:
-  build:
+  post-lineup:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -20,10 +21,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas atproto
+          pip install atproto
 
       - name: Run Lineup Script
         env:
