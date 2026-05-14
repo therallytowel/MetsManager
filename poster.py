@@ -2,6 +2,7 @@ import pandas as pd
 import random
 from atproto import Client
 import os
+import unicodedata
 
 def solve_defense(players, required_positions):
     if not players:
@@ -21,11 +22,15 @@ def solve_defense(players, required_positions):
             return result
     return None
 
+def clean_text(text):
+    if isinstance(text, str):
+        return unicodedata.normalize('NFC', text)
+    return text
+
 def generate_lineup():
-    # Load all three files with UTF-8 to handle special characters
-    pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv', encoding='utf-8')
-    bat_df = pd.read_csv('mets_batters.csv', encoding='utf-8')
-    pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8')
+    pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv', encoding='utf-8-sig')
+    bat_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
+    pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
     
     pos_df.columns = [c.strip() for c in pos_df.columns]
     bat_df.columns = [c.strip() for c in bat_df.columns]
@@ -33,7 +38,9 @@ def generate_lineup():
     
     field_pos_cols = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF']
 
+    # Position Player Processing
     pos_df = pos_df[pos_df['Player'].notna() & (pos_df['Player'].astype(str).str.lower() != 'player')]
+    pos_df['Player'] = pos_df['Player'].apply(clean_text)
     for p_col in field_pos_cols:
         if p_col in pos_df.columns:
             pos_df[p_col] = pd.to_numeric(pos_df[p_col], errors='coerce').fillna(0)
@@ -44,20 +51,32 @@ def generate_lineup():
     pos_master['EligiblePositions'] = pos_master.apply(get_eligible_list, axis=1)
 
     bat_df = bat_df.rename(columns={'Name': 'Player'})
-    for stat in ['OBP', 'OPS', 'SLG']:
-        bat_df[stat] = pd.to_numeric(bat_df[stat], errors='coerce').fillna(0)
-    
+    bat_df['Player'] = bat_df['Player'].apply(clean_text)
     master_batters = pd.merge(pos_master, bat_df[['Player', 'OBP', 'OPS', 'SLG']], on='Player', how='inner')
 
-    # Universal DH Logic: Strict separation of pitchers and hitters
-    pitcher_names = pitchers_df['Name'].unique().tolist()
-    clean_batter_pool = master_batters[~master_batters['Player'].isin(pitcher_names)]
+    # Pitcher Processing with Specific Buckets
+    pitchers_df['Name'] = pitchers_df['Name'].apply(clean_text)
+    pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
+    
+    # Identify roles based on history
+    pitcher_stats = pitchers_df.groupby('Name').agg({'GS': 'sum', 'Name': 'count'}).rename(columns={'Name': 'Apps'}).reset_index()
+    
+    # 1. Bullpen ONLY (0 Starts)
+    bp_only = pitcher_stats[pitcher_stats['GS'] == 0]['Name'].tolist()
+    # 2. Starters ONLY (Starts == Appearances)
+    starters_only = pitcher_stats[pitcher_stats['GS'] == pitcher_stats['Apps']]['Name'].tolist()
+    # 3. Hybrid (Can do both)
+    hybrids = pitcher_stats[(pitcher_stats['GS'] > 0) & (pitcher_stats['GS'] < pitcher_stats['Apps'])]['Name'].tolist()
 
+    # Draft Position Players (14 Total)
+    pitcher_names = pitcher_stats['Name'].tolist()
+    clean_batter_pool = master_batters[~master_batters['Player'].isin(pitcher_names)]
     all_sampled = clean_batter_pool.sample(14).to_dict('records')
-    starters = all_sampled[:9]
+    starters_df = all_sampled[:9]
     bench = all_sampled[9:]
 
-    pool = sorted(starters, key=lambda x: x['OPS'], reverse=True)
+    # Lineup Strategy
+    pool = sorted(starters_df, key=lambda x: x['OPS'], reverse=True)
     lineup = [None] * 9
     lineup[0] = max(pool, key=lambda x: x['OBP'])
     pool.remove(lineup[0])
@@ -76,40 +95,39 @@ def generate_lineup():
     if not defense_map:
         return generate_lineup()
 
-    pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
+    # Pitching Selection Logic
     batter_names = [p['Player'] for p in all_sampled]
-    clean_pitcher_pool = pitchers_df[~pitchers_df['Name'].isin(batter_names)]
     
-    starter_p = clean_pitcher_pool[clean_pitcher_pool['GS'] >= 5].sample(1).iloc[0]
-    bullpen = clean_pitcher_pool[clean_pitcher_pool['Name'] != starter_p['Name']].sample(4).to_dict('records')
+    # Valid Starters: Hybrid OR Starter-Only
+    valid_starters = [n for n in (starters_only + hybrids) if n not in batter_names]
+    starter_name = random.choice(valid_starters)
+    
+    # Valid Bullpen: Hybrid OR Bullpen-Only
+    valid_rp = [n for n in (bp_only + hybrids) if n not in batter_names and n != starter_name]
+    bullpen_names = random.sample(valid_rp, 4)
 
-    # Full Historical Manager Pool with Full Names
-    managers = [
-        "Casey Stengel", "Wes Westrum", "Gil Hodges", "Yogi Berra", "Roy McMillan", 
-        "Joe Frazier", "Joe Torre", "George Bamberger", "Frank Howard", "Davey Johnson", 
-        "Bud Harrelson", "Mike Cubbage", "Jeff Torborg", "Dallas Green", "Bobby Valentine", 
-        "Art Howe", "Willie Randolph", "Jerry Manuel", "Terry Collins", "Mickey Callaway", 
-        "Carlos Beltrán", "Luis Rojas", "Buck Showalter", "Carlos Mendoza"
-    ]
-    mgr = random.choice(managers)
+    managers = ["Casey Stengel", "Wes Westrum", "Gil Hodges", "Yogi Berra", "Roy McMillan", 
+                "Joe Frazier", "Joe Torre", "George Bamberger", "Frank Howard", "Davey Johnson", 
+                "Bud Harrelson", "Mike Cubbage", "Jeff Torborg", "Dallas Green", "Bobby Valentine", 
+                "Art Howe", "Willie Randolph", "Jerry Manuel", "Terry Collins", "Mickey Callaway", 
+                "Carlos Beltrán", "Luis Rojas", "Buck Showalter", "Carlos Mendoza"]
+    mgr = clean_text(random.choice(managers))
 
-    return lineup, defense_map, starter_p, bullpen, bench, mgr
+    return lineup, defense_map, starter_name, bullpen_names, bench, mgr
 
 def post_to_bluesky():
     try:
         lineup, defense, starter, bullpen, bench, mgr = generate_lineup()
         
-        # MAIN POST (Yesterday's Style with Full Manager Name)
         post_text = f"Game #4\nMgr: {mgr}\n\n"
         for i, p in enumerate(lineup):
             name = p['Player']
             post_text += f"{i+1} {name} {defense[name]}\n"
-        post_text += f"\nP: {starter['Name']}"
+        post_text += f"\nP: {starter}"
 
-        # REPLY POST (Bullpen + Bench)
-        bp_names = ", ".join([p['Name'] for p in bullpen])
+        bp_text = ", ".join(bullpen)
         bench_names = ", ".join([b['Player'] for b in bench])
-        reply_text = f"Bullpen: {bp_names}\n\nBench: {bench_names}"
+        reply_text = f"Bullpen: {bp_text}\n\nBench: {bench_names}"
 
         client = Client()
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
