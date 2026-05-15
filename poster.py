@@ -3,7 +3,8 @@ import random
 from atproto import Client
 import os
 import unicodedata
-from datetime import date
+from datetime import datetime, date
+import pytz
 
 def solve_defense(players, required_positions):
     """Assigns players to valid defensive slots using Universal DH rules."""
@@ -13,7 +14,6 @@ def solve_defense(players, required_positions):
     remaining_players = players[1:]
     eligible_pos = [p for p in required_positions if p in current_player['EligiblePositions']]
     
-    # Every player in this pool is DH eligible
     if 'DH' in required_positions:
         eligible_pos.append('DH')
     
@@ -26,10 +26,9 @@ def solve_defense(players, required_positions):
     return None
 
 def nuclear_clean(text):
-    """Enforces NFC normalization and fixes potential double-encoding for Bluesky."""
+    """Enforces NFC normalization and fixes double-encoding artifacts."""
     if isinstance(text, str):
         try:
-            # Attempt to fix existing mojibake if it exists in the CSV
             text = text.encode('cp1252').decode('utf-8')
         except (UnicodeEncodeError, UnicodeDecodeError):
             pass
@@ -37,12 +36,11 @@ def nuclear_clean(text):
     return text
 
 def generate_lineup():
-    # Load data with utf-8-sig to handle Excel-exported CSV artifacts
+    # Load data with utf-8-sig
     pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv', encoding='utf-8-sig')
     bat_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
     pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
     
-    # Clean whitespace and normalize text across all dataframes
     for df in [pos_df, bat_df, pitchers_df]:
         df.columns = [c.strip() for c in df.columns]
         name_col = 'Player' if 'Player' in df.columns else 'Name'
@@ -64,7 +62,7 @@ def generate_lineup():
     bat_df = bat_df.rename(columns={'Name': 'Player'})
     master_batters = pd.merge(pos_master, bat_df[['Player', 'OBP', 'OPS', 'SLG']], on='Player', how='inner')
 
-    # Pitcher Role Logic: Starters, Bullpen, and Hybrids
+    # Pitcher Role Logic
     pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
     p_stats = pitchers_df.groupby('Name').agg({'GS': 'sum', 'Name': 'count'}).rename(columns={'Name': 'Apps'}).reset_index()
     
@@ -72,11 +70,10 @@ def generate_lineup():
     starters_only = p_stats[p_stats['GS'] == p_stats['Apps']]['Name'].tolist()
     hybrids = p_stats[(p_stats['GS'] > 0) & (p_stats['GS'] < p_stats['Apps'])]['Name'].tolist()
 
-    # Role Firewall: Block anyone in the pitcher file from the hitting pool
+    # Role Firewall
     pitcher_names = p_stats['Name'].tolist()
     clean_batter_pool = master_batters[~master_batters['Player'].isin(pitcher_names)]
 
-    # Draft 14 hitters (9 starters, 5 bench)
     all_sampled = clean_batter_pool.sample(14).to_dict('records')
     starters_list = all_sampled[:9]
     bench = all_sampled[9:]
@@ -93,7 +90,6 @@ def generate_lineup():
     for i, slot in enumerate(rem_slots):
         lineup[slot] = pool[i]
 
-    # Resolve Defense with Universal DH
     defense_map = solve_defense(lineup, ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'])
     if not defense_map: return generate_lineup()
 
@@ -121,23 +117,26 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bullpen, bench, mgr = generate_lineup()
         
-        # Game Counter Logic: May 14, 2026 is Game #1
+        # --- ROBUST AUTO-INCREMENT (ET Timezone) ---
+        # Forces the script to check New York time instead of UTC
+        eastern = pytz.timezone('America/New_York')
+        today_et = datetime.now(eastern).date()
+        
+        # May 14, 2026 was Game #1
         start_date = date(2026, 5, 14)
-        game_number = (date.today() - start_date).days + 1
+        game_number = (today_et - start_date).days + 1
+        # -------------------------------------------
 
-        # Format Main Post
         post_text = f"Game #{game_number}\nMgr: {mgr}\n\n"
         for i, p in enumerate(lineup):
             name = p['Player']
             post_text += f"{i+1} {name} {defense[name]}\n"
         post_text += f"\nP: {starter}"
 
-        # Format Reply Post
         bp_text = ", ".join(bullpen)
         bench_text = ", ".join([b['Player'] for b in bench])
         reply_text = f"Bullpen: {bp_text}\n\nBench: {bench_text}"
 
-        # Bluesky Authentication and Posting
         client = Client()
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         
