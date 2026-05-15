@@ -2,46 +2,27 @@ name: Mets Mystery Manager Daily
 
 on:
   schedule:
-    # This fires at 1:17 PM America/New_York time every day
+    # 1:17 PM ET (Avoiding the top-of-the-hour traffic)
     - cron: '17 13 * * *'
       timezone: 'America/New_York'
   
-  # Allows you to manually trigger Game #2 today from the Actions tab
-  workflow_dispatch:
-
-  # Optional: Runs the script automatically if you update your CSVs
-  push:
-    branches:
-      - main
-    paths:
-      - 'mets_batters.csv'
-      - 'mets_pitchers.csv'
-      - 'poster.py'
+  workflow_dispatch: # Your manual button
 
 jobs:
   post_lineup:
     runs-on: ubuntu-latest
-    
-    # Ensures we are using the 2026 environment standards
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
-      BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas atproto pytz
+        run: pip install pandas atproto pytz
 
-      - name: Run Mystery Manager
+      - name: Run Script
+        env:
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
         run: python poster.py
