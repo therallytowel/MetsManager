@@ -1,14 +1,33 @@
-name: Mets Mystery Manager Daily Lineup
+name: Mets Mystery Manager Daily
 
 on:
   schedule:
-    # 1:13 PM EDT (17:13 UTC)
-    - cron: '13 17 * * *'
+    # This fires at 1:17 PM America/New_York time every day
+    - cron: '17 13 * * *'
+      timezone: 'America/New_York'
+  
+  # Allows you to manually trigger Game #2 today from the Actions tab
   workflow_dispatch:
 
+  # Optional: Runs the script automatically if you update your CSVs
+  push:
+    branches:
+      - main
+    paths:
+      - 'mets_batters.csv'
+      - 'mets_pitchers.csv'
+      - 'poster.py'
+
 jobs:
-  post-lineup:
+  post_lineup:
     runs-on: ubuntu-latest
+    
+    # Ensures we are using the 2026 environment standards
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+      BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -16,16 +35,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Added pandas here to fix the ModuleNotFoundError
-          pip install atproto pandas
+          pip install pandas atproto pytz
 
-      - name: Run Lineup Script
-        env:
-          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
-          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+      - name: Run Mystery Manager
         run: python poster.py
