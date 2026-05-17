@@ -141,14 +141,13 @@ def post_to_bluesky():
 
         reply_text = f"Bullpen: {', '.join(bp_rows['Name'])}\n\nBench: {', '.join([b['Player'] for b in bench])}"
 
-        # Network Payload Configuration
+        # --- FIX: Instantiate the client cleanly using the public PDS proxy endpoint ---
         client = Client(base_url='https://bsky.social')
-        client.request.headers.update({
-            'User-Agent': 'MetsMysteryManagerBot/1.0 (Contact: local-runner@rallytowel.com)'
-        })
         
+        # Log in natively using account environmental variables
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         
+        # Publish the starting card, then thread the bullpen/bench reply underneath
         root = client.send_post(post_text)
         parent_ref = {'cid': root.cid, 'uri': root.uri}
         client.send_post(reply_text, reply_to={'root': parent_ref, 'parent': parent_ref})
