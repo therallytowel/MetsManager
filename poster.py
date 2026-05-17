@@ -29,29 +29,33 @@ def solve_defense(players, required_positions):
 
 def calculate_amazin_index(lineup, starter_row, bp_rows, mgr_name):
     """
-    The Amazin' Index Calculation:
-    1. Hitting (40%): Based on average OPS.
-    2. Pitching (40%): Based on ERA+ (Starter weighted 25%, Bullpen 15%).
-    3. Legacy (20%): Superstar Clause - 0.5 pts per ASG, capped at 10.
+    The Amazin' Index Calculation (Fixed & Calibrated):
+    - Hitting (40 pts max): Scaled linearly between .600 OPS (0 pts) and .850 OPS (40 pts).
+    - Pitching (40 pts max): Scaled so 100 ERA+ is 20 pts, 150 ERA+ is 40 pts.
+    - Legacy (10 pts max): 0.5 pts per All-Star appearance, capped at 10.
+    Maximum theoretical score = 90 + 10 = 100.
     """
-    # 1. Hitting
-    avg_ops = sum([p.get('OPS', 0.720) for p in lineup]) / 9
-    hitting_score = (avg_ops - 0.450) * 160 
+    # 1. Hitting (Cap at 40 points)
+    avg_ops = sum([float(p.get('OPS', 0.720)) for p in lineup]) / 9
+    hitting_score = (avg_ops - 0.600) * 160
+    hitting_score = max(0, min(hitting_score, 40)) 
     
-    # 2. Pitching
-    s_era = starter_row.get('ERA+', 100)
-    bp_era = sum([p.get('ERA+', 100) for p in bp_rows]) / len(bp_rows)
-    pitching_score = (s_era * 0.25) + (bp_era * 0.15) 
+    # 2. Pitching (Cap at 40 points)
+    s_era = float(starter_row.get('ERA+', 100))
+    bp_era = sum([float(p.get('ERA+', 100)) for p in bp_rows]) / len(bp_rows)
     
-    # 3. Legacy (The Superstar Clause)
-    total_asg = sum([p.get('ASG', 0) for p in lineup]) + starter_row.get('ASG', 0)
+    pitching_score = ((s_era - 100) * 0.4) + ((bp_era - 100) * 0.2) + 20
+    pitching_score = max(0, min(pitching_score, 40)) 
+    
+    # 3. Legacy (The Superstar Clause - Cap at 10 points)
+    total_asg = sum([int(p.get('ASG', 0)) for p in lineup]) + int(starter_row.get('ASG', 0))
     legacy_boost = min(total_asg * 0.5, 10) 
     
-    final_score = hitting_score + pitching_score + legacy_boost
+    final_score = hitting_score + pitching_score + legacy_boost + 10
     return round(max(15, min(final_score, 100)))
 
 def get_status_label(score):
-    """Maps the numeric score to our historical Mets tiers."""
+    """Maps the numeric score to our historical Mets tiers using clean elif logic."""
     if score >= 88:
         return "World Series Favorites 🏆"
     elif score >= 78:
@@ -120,7 +124,7 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
         
-        # Reset to Game #1 for May 15, 2026
+        # TIME SYNC: Calibrated so running the script on May 17, 2026 logs as Game #3
         et = pytz.timezone('America/New_York')
         game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
         
@@ -137,7 +141,12 @@ def post_to_bluesky():
 
         reply_text = f"Bullpen: {', '.join(bp_rows['Name'])}\n\nBench: {', '.join([b['Player'] for b in bench])}"
 
-        client = Client()
+        # Network Payload Configuration
+        client = Client(base_url='https://bsky.social')
+        client.request.headers.update({
+            'User-Agent': 'MetsMysteryManagerBot/1.0 (Contact: local-runner@rallytowel.com)'
+        })
+        
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         
         root = client.send_post(post_text)
