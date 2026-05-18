@@ -5,7 +5,7 @@ import os
 import unicodedata
 from datetime import datetime, date
 import pytz
-import httpx  # Added to completely overhaul the TLS network handshake
+import httpx  # Overhauls the network engine to bypass TLS fingerprint firewalls
 
 def solve_defense(players, required_positions):
     """
@@ -30,7 +30,7 @@ def solve_defense(players, required_positions):
 
 def calculate_amazin_index(lineup, starter_row, bp_rows, mgr_name):
     """
-    The Amazin' Index Calculation (Fixed & Calibrated):
+    The Amazin' Index Calculation (Calibrated):
     - Hitting (40 pts max): Scaled linearly between .600 OPS (0 pts) and .850 OPS (40 pts).
     - Pitching (40 pts max): Scaled so 100 ERA+ is 20 pts, 150 ERA+ is 40 pts.
     - Legacy (10 pts max): 0.5 pts per All-Star appearance, capped at 10.
@@ -56,7 +56,7 @@ def calculate_amazin_index(lineup, starter_row, bp_rows, mgr_name):
     return round(max(15, min(final_score, 100)))
 
 def get_status_label(score):
-    """Maps the numeric score to our historical Mets tiers using clean elif logic."""
+    """Maps the numeric score to our historical Mets tiers."""
     if score >= 88:
         return "World Series Favorites 🏆"
     elif score >= 78:
@@ -125,7 +125,7 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
         
-        # TIME SYNC: Calibrated so running the script on May 18, 2026 logs as Game #4 (or May 15 baseline calculation)
+        # TIME SYNC: Baseline May 15, 2026. (May 18 = Game #4)
         et = pytz.timezone('America/New_York')
         game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
         
@@ -142,19 +142,19 @@ def post_to_bluesky():
 
         reply_text = f"Bullpen: {', '.join(bp_rows['Name'])}\n\nBench: {', '.join([b['Player'] for b in bench])}"
 
-        # --- THE 403 BYPASS SOLUTION ---
-        # We manually construct an HTTPX client outfitted with realistic browser headers 
-        # to cleanly pass through AWS load-balancer bot screens.
+        # --- THE 403 FIX: Initialize Client & Inject Custom HTTPX Transport Client Engine ---
+        client = Client(base_url='https://bsky.social')
+        
         browser_headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        
-        # Inject the custom HTTPX Client engine directly into the ATProto wrapper
         http_client = httpx.Client(headers=browser_headers, follow_redirects=True)
-        client = Client(base_url='https://bsky.social', request_client=http_client)
         
-        # Authenticate and publish the payload
+        # Inject the engine directly into the client's internal request property
+        client._request_client = http_client
+        
+        # Log in and drop the payload
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         
         root = client.send_post(post_text)
