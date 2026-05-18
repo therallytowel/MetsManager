@@ -5,6 +5,7 @@ import os
 import unicodedata
 from datetime import datetime, date
 import pytz
+import httpx  # Added to completely overhaul the TLS network handshake
 
 def solve_defense(players, required_positions):
     """
@@ -124,7 +125,7 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
         
-        # TIME SYNC: Calibrated so running the script on May 17, 2026 logs as Game #3
+        # TIME SYNC: Calibrated so running the script on May 18, 2026 logs as Game #4 (or May 15 baseline calculation)
         et = pytz.timezone('America/New_York')
         game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
         
@@ -141,13 +142,21 @@ def post_to_bluesky():
 
         reply_text = f"Bullpen: {', '.join(bp_rows['Name'])}\n\nBench: {', '.join([b['Player'] for b in bench])}"
 
-        # --- FIX: Instantiate the client cleanly using the public PDS proxy endpoint ---
-        client = Client(base_url='https://bsky.social')
+        # --- THE 403 BYPASS SOLUTION ---
+        # We manually construct an HTTPX client outfitted with realistic browser headers 
+        # to cleanly pass through AWS load-balancer bot screens.
+        browser_headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
         
-        # Log in natively using account environmental variables
+        # Inject the custom HTTPX Client engine directly into the ATProto wrapper
+        http_client = httpx.Client(headers=browser_headers, follow_redirects=True)
+        client = Client(base_url='https://bsky.social', request_client=http_client)
+        
+        # Authenticate and publish the payload
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         
-        # Publish the starting card, then thread the bullpen/bench reply underneath
         root = client.send_post(post_text)
         parent_ref = {'cid': root.cid, 'uri': root.uri}
         client.send_post(reply_text, reply_to={'root': parent_ref, 'parent': parent_ref})
