@@ -6,6 +6,7 @@ import unicodedata
 from datetime import datetime, date
 import pytz
 import httpx
+from PIL import Image, ImageDraw, ImageFont
 
 def solve_defense(players, required_positions):
     """
@@ -68,6 +69,42 @@ def get_status_label(score):
     else:
         return "Panic Citi 😱"
 
+def create_story_image(lineup, defense, starter, mgr, score, status, game_num):
+    """
+    Generates a clean 1080x1920 vertical canvas tailored for Instagram Stories.
+    """
+    try:
+        base_img = Image.open("story_template.png").convert("RGBA")
+    except FileNotFoundError:
+        # Fallback: Create a beautiful solid dark Mets Blue canvas if background template isn't tracked
+        base_img = Image.new("RGBA", (1080, 1920), (12, 35, 64, 255))
+        
+    canvas = ImageDraw.Draw(base_img)
+    
+    # Use default basic fonts built natively into GitHub runner environments
+    font_title = ImageFont.load_default()
+    font_body = ImageFont.load_default()
+
+    # Layout print text mapping
+    canvas.text((100, 250), f"GAME #{game_num}", font=font_title, fill=(255, 255, 255))
+    canvas.text((100, 340), f"Amazin' Index: {score}/100", font=font_body, fill=(252, 76, 2)) # Mets Orange
+    canvas.text((100, 410), f"({status})", font=font_body, fill=(255, 255, 255))
+    canvas.text((100, 500), f"Manager: {mgr}", font=font_title, fill=(255, 255, 255))
+    
+    y_offset = 650
+    for i, p in enumerate(lineup):
+        name = p['Player']
+        pos = defense[name]
+        canvas.text((100, y_offset), f"{i+1}. {name} ({pos})", font=font_body, fill=(255, 255, 255))
+        y_offset += 90
+        
+    canvas.text((100, y_offset + 50), f"Starting P: {starter['Name']}", font=font_title, fill=(252, 76, 2))
+
+    # Output file mapped to workflow tracking wildcard (*.png)
+    output_filename = "today_story_card.png"
+    base_img.save(output_filename)
+    print(f"Story image written cleanly to disk: {output_filename}")
+
 def generate_lineup():
     # Load Data from Baseball-Reference Source Files
     pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv', encoding='utf-8-sig')
@@ -118,14 +155,15 @@ def generate_lineup():
     pitcher_names = p_stats['Name'].tolist()
     clean_batters = master_batters[~master_batters['Player'].isin(pitcher_names)]
 
+    # Time Sync Mapping
+    et = pytz.timezone('America/New_York')
+    today = datetime.now(et).date()
+    game_num = (today - date(2026, 5, 15)).days + 1
+
     # -----------------------------------------------------------------
     # SATURDAY INDUCTION EASTER EGG OVERRIDE BLOCK (Lee Mazzilli CF Edition)
     # -----------------------------------------------------------------
-    et = pytz.timezone('America/New_York')
-    today = datetime.now(et).date()
-    
     if today == date(2026, 5, 30):
-        # Hardcoded list of on-field Mets Hall of Fame Players
         hof_players = [
             "Bud Harrelson", "Rusty Staub", "Tom Seaver", "Jerry Koosman", 
             "Ed Kranepool", "Cleon Jones", "Jerry Grote", "Tug McGraw", 
@@ -135,32 +173,24 @@ def generate_lineup():
             "Al Leiter", "David Wright", "Lee Mazzilli"
         ]
         
-        # Filter pools to ONLY HOFers
         hof_batters_df = clean_batters[clean_batters['Player'].isin(hof_players)].copy()
         hof_pitchers_df = p_stats[p_stats['Name'].isin(hof_players)].copy()
         
-        # Pull Lee Mazzilli out separately
         mazzilli_row = hof_batters_df[hof_batters_df['Player'] == "Lee Mazzilli"].to_dict('records')[0]
         other_hof_batters = hof_batters_df[hof_batters_df['Player'] != "Lee Mazzilli"]
         
-        # Sample 13 other HOF players to complete the 14-man roster pool
         sampled_batters = other_hof_batters.sample(13).to_dict('records')
-        
-        # The Starting Lineup Pool: Mazzilli + the first 8 sampled batters
         lineup_pool = [mazzilli_row] + sampled_batters[:8]
         bench = sampled_batters[8:]
         
-        # --- POSITION FIX: Force Mazzilli to CF, then solve the remaining 8 spots ---
         remaining_positions = ['C', '1B', '2B', '3B', 'SS', 'LF', 'RF', 'DH']
         other_lineup_players = [p for p in lineup_pool if p['Player'] != "Lee Mazzilli"]
         
         defense_map = solve_defense(other_lineup_players, remaining_positions)
         if not defense_map: return generate_lineup()
         
-        # Lock Maz into Center Field
         defense_map["Lee Mazzilli"] = "CF"
         
-        # Select Pitchers exclusively from the HOF pool
         valid_starters = hof_pitchers_df[hof_pitchers_df['GS'] > 0]
         starter_row = valid_starters.sample(1).iloc[0]
         
@@ -168,8 +198,11 @@ def generate_lineup():
         bp_rows = remaining_p.sample(4)
         
         mgr = "Bobby Valentine (In Disguise) 🥸"
-        
         score = calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), mgr)
+        status = get_status_label(score)
+        
+        # Build the PNG graphic before returning values
+        create_story_image(lineup_pool, defense_map, starter_row, mgr, score, status, game_num)
         return lineup_pool, defense_map, starter_row, bp_rows, bench, mgr, score
     
     # -----------------------------------------------------------------
@@ -197,16 +230,18 @@ def generate_lineup():
         mgr = "Bobby Valentine (In Disguise) 🥸"
 
     score = calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), mgr)
+    status = get_status_label(score)
+    
+    # Build the PNG graphic before returning values
+    create_story_image(lineup_pool, defense_map, starter_row, mgr, score, status, game_num)
     return lineup_pool, defense_map, starter_row, bp_rows, bench, mgr, score
 
 def post_to_bluesky():
     try:
         lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
         
-        # TIME SYNC: Baseline May 15, 2026 scheduling target
         et = pytz.timezone('America/New_York')
         game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
-        
         status = get_status_label(score)
 
         post_text = f"Game #{game_num}\n"
@@ -235,7 +270,7 @@ def post_to_bluesky():
         parent_ref = {'cid': root.cid, 'uri': root.uri}
         client.send_post(reply_text, reply_to={'root': parent_ref, 'parent': parent_ref})
         
-        print(f"Successfully posted Game #{game_num}")
+        print(f"Successfully posted Game #{game_num} to Bluesky.")
     except Exception as e:
         print(f"Post failed: {e}")
 
