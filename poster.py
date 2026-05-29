@@ -5,7 +5,7 @@ import os
 import unicodedata
 from datetime import datetime, date
 import pytz
-import httpx  # Overhauls the network engine to bypass TLS fingerprint firewalls
+import httpx
 
 def solve_defense(players, required_positions):
     """
@@ -74,7 +74,7 @@ def generate_lineup():
     bat_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
     pitchers_df = pd.read_csv('mets_pitchers.csv', encoding='utf-8-sig')
     
-    # FIX: Clean up encoding artifacts (like JosÃ©) across all raw text streams
+    # Clean up encoding artifacts across all datasets
     for df, col_name in [(pos_df, 'Player'), (bat_df, 'Name'), (pitchers_df, 'Name')]:
         if col_name in df.columns:
             df[col_name] = df[col_name].apply(
@@ -90,14 +90,15 @@ def generate_lineup():
     pos_master = pos_df.groupby('Player')[field_pos_cols].sum().reset_index()
     pos_master['EligiblePositions'] = pos_master.apply(lambda r: [p for p in field_pos_cols if r[p] > 0], axis=1)
 
-    # Process Batter Stats
+    # Process Batter Stats & Clean Games Played column
     bat_df = bat_df.rename(columns={'Name': 'Player'})
+    bat_df['G'] = pd.to_numeric(bat_df['G'], errors='coerce').fillna(1)
     master_batters = pd.merge(pos_master, bat_df, on='Player', how='inner')
     
-    # Process Pitcher Stats
+    # Process Pitcher Stats & Clean Appearances column
     pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
+    pitchers_df['G'] = pd.to_numeric(pitchers_df['G'], errors='coerce').fillna(1)
     
-    # SAFEST PITCHER ERA+ PARSER: Safely strips out string characters from dirty columns
     if 'ERA+' in pitchers_df.columns:
         pitchers_df['ERA+'] = pitchers_df['ERA+'].astype(str).str.replace(r'[^\d.]', '', regex=True)
         pitchers_df['ERA+'] = pd.to_numeric(pitchers_df['ERA+'], errors='coerce').fillna(100)
@@ -108,27 +109,34 @@ def generate_lineup():
     
     p_stats = pitchers_df.groupby('Name').agg({
         'GS': 'sum', 
-        'Name': 'count', 
+        'G': 'sum', # Total appearances across their entire Mets career
         'ERA+': 'mean', 
         'ASG': 'max'
-    }).rename(columns={'Name': 'Apps'}).reset_index()
+    }).reset_index()
     
     # Ensure Pitchers aren't drafted as Batters
     pitcher_names = p_stats['Name'].tolist()
     clean_batters = master_batters[~master_batters['Player'].isin(pitcher_names)]
     
-    # Randomized Drafting
-    all_sampled = clean_batters.sample(14).to_dict('records')
+    # --- LIVELY UPGRADE: Weighted Random Drafting ---
+    # Players with more games played have a linearly higher probability of being sampled.
+    # Min game weight of 1 ensures the obscure 1-game legends can still technically make it!
+    clean_batters['Weight'] = clean_batters['G'].clip(lower=1)
+    all_sampled = clean_batters.sample(14, weights='Weight').to_dict('records')
     lineup_pool = all_sampled[:9]
     bench = all_sampled[9:]
 
     defense_map = solve_defense(lineup_pool, ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'])
     if not defense_map: return generate_lineup()
 
-    # Staff Selection
+    # Staff Selection using Pitcher Game weights
+    p_stats['Weight'] = p_stats['G'].clip(lower=1)
+    
     valid_starters = p_stats[p_stats['GS'] > 0]
-    starter_row = valid_starters.sample(1).iloc[0]
-    bp_rows = p_stats[p_stats['Name'] != starter_row['Name']].sample(4)
+    starter_row = valid_starters.sample(1, weights='Weight').iloc[0]
+    
+    remaining_p = p_stats[p_stats['Name'] != starter_row['Name']]
+    bp_rows = remaining_p.sample(4, weights='Weight')
 
     managers = ["Gil Hodges", "Davey Johnson", "Bobby Valentine", "Terry Collins", "Buck Showalter", "Carlos Mendoza", "Casey Stengel", "Yogi Berra"]
     mgr = random.choice(managers)
@@ -140,7 +148,7 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
         
-        # TIME SYNC: Baseline May 15, 2026 scheduling target
+        # TIME SYNC
         et = pytz.timezone('America/New_York')
         game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
         
@@ -157,19 +165,15 @@ def post_to_bluesky():
 
         reply_text = f"Bullpen: {', '.join(bp_rows['Name'])}\n\nBench: {', '.join([b['Player'] for b in bench])}"
 
-        # Initialize Client & Inject Custom HTTPX Transport Client Engine to pass TLS firewalls
+        # Initialize Client Engine
         client = Client(base_url='https://bsky.social')
-        
         browser_headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         }
         http_client = httpx.Client(headers=browser_headers, follow_redirects=True)
-        
-        # Force the engine proxy into the client property right before authenticating
         client._request_client = http_client
         
-        # Log in and drop the payload parameters
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         
         root = client.send_post(post_text)
