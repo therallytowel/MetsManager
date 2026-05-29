@@ -70,33 +70,11 @@ def get_status_label(score):
     else:
         return "Panic Citi 😱"
 
-def draw_large_text(canvas, x, y, text, size_scale=3, fill_color=(255, 255, 255)):
-    """
-    Simulates high-res, readable mobile fonts inside standard Linux environments 
-    without requiring external TTF asset tracks.
-    """
-    font = ImageFont.load_default()
-    # Create a small high-contrast text layer mask
-    text_img = Image.new('L', canvas.im.size, 0)
-    text_canvas = ImageDraw.Draw(text_img)
-    text_canvas.text((x, y), text, font=font, fill=255)
-    # Upscale mask transformations cleanly
-    scaled_mask = text_img.resize((text_img.width * size_scale, text_img.height * size_scale), Image.NEAREST)
-    
-    # Crop alignment vectors to scale properties
-    actual_mask = scaled_mask.crop((x * (size_scale - 1), y * (size_scale - 1), 
-                                    scaled_mask.width, scaled_mask.height))
-    
-    # Overlay crisp block characters onto target image surface
-    canvas.text((x, y), text, font=font, fill=fill_color)
-
 def create_story_image(lineup, defense, starter, bp_rows, bench, mgr, score, status, game_num):
     """
-    Generates TWO cohesive 1080x1920 vertical canvases tailored for Instagram Stories.
-    Card 1: Starting Lineup & Manager
-    Card 2: Bullpen Arms & Bench Depth
+    Generates TWO high-quality, professional 1080x1920 vertical canvases for Instagram Stories.
+    Uses robust Linux system font paths to ensure high-resolution, anti-aliased typography.
     """
-    # Base canvas configuration: Standardized dark Mets Blue backdrop
     mets_blue = (12, 35, 64, 255)
     mets_orange = (252, 76, 2, 255)
     white = (255, 255, 255, 255)
@@ -105,31 +83,63 @@ def create_story_image(lineup, defense, starter, bp_rows, bench, mgr, score, sta
         base_template = Image.open("story_template.png").convert("RGBA")
     except FileNotFoundError:
         base_template = Image.new("RGBA", (1080, 1920), mets_blue)
+
+    # --- LINUX SYSTEM FONT FALLBACK LOADING SYSTEM ---
+    font_paths = [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+    ]
+    
+    font_title = None
+    font_sub = None
+    font_body = None
+    
+    for path in font_paths:
+        if os.path.exists(path):
+            try:
+                font_title = ImageFont.truetype(path, 42)
+                font_sub = ImageFont.truetype(path, 34)
+                font_body = ImageFont.truetype(path, 38)
+                break
+            except Exception:
+                continue
+                
+    if font_title is None:
+        font_title = font_sub = font_body = ImageFont.load_default()
         
+    # Strip emojis to avoid un-renderable system character block issues on the image canvas
+    clean_status = status.replace("🏆", "").replace("🍏", "").replace("⚾️", "").replace("🏗️", "").replace("😱", "").strip()
+    clean_mgr = mgr.replace("🥸", "").strip()
+
     # --- CARD 1: THE STARTING LINEUP ---
     img1 = base_template.copy()
     canvas1 = ImageDraw.Draw(img1)
 
     # Header Stats Block
-    canvas1.text((100, 180), f"METS MYSTERY MANAGER  |  GAME #{game_num}", fill=mets_orange)
-    canvas1.line([(100, 220), (980, 220)], fill=white, width=4)
+    canvas1.text((100, 150), f"METS MYSTERY MANAGER  |  GAME #{game_num}", font=font_sub, fill=mets_orange)
+    canvas1.line([(100, 210), (980, 210)], fill=white, width=4)
     
-    canvas1.text((100, 260), f"AMAZIN' INDEX: {score}/100", fill=white)
-    canvas1.text((100, 310), f"STATUS: {status}", fill=white)
-    canvas1.text((100, 380), f"SKIPPER: {mgr}", fill=mets_orange)
-    canvas1.line([(100, 430), (500, 430)], fill=mets_orange, width=2)
+    canvas1.text((100, 250), f"AMAZIN' INDEX: {score}/100", font=font_title, fill=white)
+    canvas1.text((100, 310), f"STATUS: {clean_status.upper()}", font=font_sub, fill=white)
+    canvas1.text((100, 390), f"SKIPPER: {clean_mgr.upper()}", font=font_title, fill=mets_orange)
+    canvas1.line([(100, 450), (520, 450)], fill=mets_orange, width=3)
     
-    # Order Layout
-    y_offset = 500
+    # Order Layout (Clean line heights and safe tabbed horizontal alignments)
+    y_offset = 530
     for i, p in enumerate(lineup):
         name = p['Player'].upper()
+        # Safe lookup capitalization normalization block
         pos = defense[name.title() if 'Mazzilli' in name or 'Piazza' in name else name.title()]
-        canvas1.text((100, y_offset), f"{i+1}  {name.ljust(22)} ({pos})", fill=white)
-        y_offset += 100
+        
+        canvas1.text((100, y_offset), f"{i+1}", font=font_body, fill=mets_orange)
+        canvas1.text((180, y_offset), name, font=font_body, fill=white)
+        canvas1.text((750, y_offset), f"({pos})", font=font_body, fill=white)
+        y_offset += 105
         
     # Pitcher Footer Section
     canvas1.line([(100, 1520), (980, 1520)], fill=white, width=4)
-    canvas1.text((100, 1560), f"STARTING PITCHER: {starter['Name'].upper()}", fill=mets_orange)
+    canvas1.text((100, 1570), f"STARTING PITCHER: {starter['Name'].upper()}", font=font_title, fill=mets_orange)
     img1.save("today_story_card_1.png")
 
     # --- CARD 2: THE RESERVES & DEPTH ---
@@ -137,36 +147,38 @@ def create_story_image(lineup, defense, starter, bp_rows, bench, mgr, score, sta
     canvas2 = ImageDraw.Draw(img2)
 
     # Matching Header Block
-    canvas2.text((100, 180), f"METS MYSTERY MANAGER  |  ROSTER DEPTH", fill=mets_orange)
-    canvas2.line([(100, 220), (980, 220)], fill=white, width=4)
+    canvas2.text((100, 150), "METS MYSTERY MANAGER  |  ROSTER DEPTH", font=font_sub, fill=mets_orange)
+    canvas2.line([(100, 210), (980, 210)], fill=white, width=4)
     
     # Section A: Bullpen
-    canvas2.text((100, 280), "BULLPEN RESERVES", fill=white)
-    canvas2.line([(100, 330), (400, 330)], fill=white, width=2)
+    canvas2.text((100, 270), "BULLPEN RESERVES", font=font_title, fill=white)
+    canvas2.line([(100, 325), (490, 325)], fill=white, width=2)
     
     y_offset = 380
     bp_list = bp_rows.to_dict('records') if hasattr(bp_rows, 'to_dict') else bp_rows
     for p in bp_list:
         p_name = p.get('Name', p.get('Player', 'Unknown Pitcher')).upper()
-        canvas2.text((120, y_offset), f"⚡  {p_name}", fill=white)
+        canvas2.text((100, y_offset), ">", font=font_body, fill=mets_orange)
+        canvas2.text((160, y_offset), p_name, font=font_body, fill=white)
         y_offset += 110
 
     # Section B: Bench
-    canvas2.text((100, y_offset + 50), "BENCH OPTIONS", fill=white)
-    canvas2.line([(100, y_offset + 100), (370, y_offset + 100)], fill=white, width=2)
+    canvas2.text((100, y_offset + 40), "BENCH OPTIONS", font=font_title, fill=white)
+    canvas2.line([(100, y_offset + 95), (430, y_offset + 95)], fill=white, width=2)
     
     y_offset += 150
     for b in bench:
         b_name = b['Player'].upper()
-        canvas2.text((120, y_offset), f"🪵  {b_name}", fill=white)
+        canvas2.text((100, y_offset), ">", font=font_body, fill=mets_orange)
+        canvas2.text((160, y_offset), b_name, font=font_body, fill=white)
         y_offset += 110
 
     # Matching Footer Block
     canvas2.line([(100, 1520), (980, 1520)], fill=white, width=4)
-    canvas2.text((100, 1560), "HOF INDUCTION WEEKEND SPECIAL EDITION", fill=mets_orange)
+    canvas2.text((100, 1570), "HOF INDUCTION WEEKEND SPECIAL EDITION", font=font_title, fill=mets_orange)
     img2.save("today_story_card_2.png")
     
-    print("Both cohesive story card graphics successfully rendered to disk.")
+    print("Both cohesive story card graphics successfully rendered with high-res typography.")
 
 def generate_lineup():
     # Load Data from Baseball-Reference Source Files
