@@ -2,24 +2,26 @@ name: Mets Mystery Manager Daily
 
 on:
   schedule:
-    # 1:17 PM ET (Avoiding the top-of-the-hour traffic)
-    - cron: '17 13 * * *'
-      timezone: 'America/New_York'
+    # 15:45 UTC translates to 11:45 AM Eastern Daylight Time (EDT)
+    # Ticking at :45 avoids top-of-the-hour queue traffic on GitHub's shared runners.
+    - cron: '45 15 * * *'
   
-  workflow_dispatch: # Your manual button
+  workflow_dispatch: # Keeps your manual trigger button active in the UI
 
 jobs:
   post_lineup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: Install Dependencies
-        run: pip install pandas atproto pytz
+        # Added httpx to work seamlessly with the overhauled poster.py network engine
+        run: pip install pandas atproto pytz httpx
 
       - name: Run Script
         env:
