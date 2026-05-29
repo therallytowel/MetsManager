@@ -109,7 +109,7 @@ def generate_lineup():
     
     p_stats = pitchers_df.groupby('Name').agg({
         'GS': 'sum', 
-        'G': 'sum', # Total appearances across their entire Mets career
+        'G': 'sum',
         'ERA+': 'mean', 
         'ASG': 'max'
     }).reset_index()
@@ -117,10 +117,64 @@ def generate_lineup():
     # Ensure Pitchers aren't drafted as Batters
     pitcher_names = p_stats['Name'].tolist()
     clean_batters = master_batters[~master_batters['Player'].isin(pitcher_names)]
+
+    # -----------------------------------------------------------------
+    # SATURDAY INDUCTION EASTER EGG OVERRIDE BLOCK (Lee Mazzilli CF Edition)
+    # -----------------------------------------------------------------
+    et = pytz.timezone('America/New_York')
+    today = datetime.now(et).date()
     
-    # --- LIVELY UPGRADE: Weighted Random Drafting ---
-    # Players with more games played have a linearly higher probability of being sampled.
-    # Min game weight of 1 ensures the obscure 1-game legends can still technically make it!
+    if today == date(2026, 5, 30):
+        # Hardcoded list of on-field Mets Hall of Fame Players
+        hof_players = [
+            "Bud Harrelson", "Rusty Staub", "Tom Seaver", "Jerry Koosman", 
+            "Ed Kranepool", "Cleon Jones", "Jerry Grote", "Tug McGraw", 
+            "Mookie Wilson", "Keith Hernandez", "Gary Carter", "Tommie Agee", 
+            "Dwight Gooden", "Darryl Strawberry", "John Franco", "Mike Piazza", 
+            "Jon Matlack", "Ron Darling", "Edgardo Alfonzo", "Howard Johnson", 
+            "Al Leiter", "David Wright", "Lee Mazzilli"
+        ]
+        
+        # Filter pools to ONLY HOFers
+        hof_batters_df = clean_batters[clean_batters['Player'].isin(hof_players)].copy()
+        hof_pitchers_df = p_stats[p_stats['Name'].isin(hof_players)].copy()
+        
+        # Pull Lee Mazzilli out separately
+        mazzilli_row = hof_batters_df[hof_batters_df['Player'] == "Lee Mazzilli"].to_dict('records')[0]
+        other_hof_batters = hof_batters_df[hof_batters_df['Player'] != "Lee Mazzilli"]
+        
+        # Sample 13 other HOF players to complete the 14-man roster pool
+        sampled_batters = other_hof_batters.sample(13).to_dict('records')
+        
+        # The Starting Lineup Pool: Mazzilli + the first 8 sampled batters
+        lineup_pool = [mazzilli_row] + sampled_batters[:8]
+        bench = sampled_batters[8:]
+        
+        # --- POSITION FIX: Force Mazzilli to CF, then solve the remaining 8 spots ---
+        remaining_positions = ['C', '1B', '2B', '3B', 'SS', 'LF', 'RF', 'DH']
+        other_lineup_players = [p for p in lineup_pool if p['Player'] != "Lee Mazzilli"]
+        
+        defense_map = solve_defense(other_lineup_players, remaining_positions)
+        if not defense_map: return generate_lineup()
+        
+        # Lock Maz into Center Field
+        defense_map["Lee Mazzilli"] = "CF"
+        
+        # Select Pitchers exclusively from the HOF pool
+        valid_starters = hof_pitchers_df[hof_pitchers_df['GS'] > 0]
+        starter_row = valid_starters.sample(1).iloc[0]
+        
+        remaining_p = hof_pitchers_df[hof_pitchers_df['Name'] != starter_row['Name']]
+        bp_rows = remaining_p.sample(4)
+        
+        mgr = "Bobby Valentine (In Disguise) 🥸"
+        
+        score = calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), mgr)
+        return lineup_pool, defense_map, starter_row, bp_rows, bench, mgr, score
+    
+    # -----------------------------------------------------------------
+    # STANDARD RUN LOGIC (For every other day of the year)
+    # -----------------------------------------------------------------
     clean_batters['Weight'] = clean_batters['G'].clip(lower=1)
     all_sampled = clean_batters.sample(14, weights='Weight').to_dict('records')
     lineup_pool = all_sampled[:9]
@@ -129,9 +183,7 @@ def generate_lineup():
     defense_map = solve_defense(lineup_pool, ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'])
     if not defense_map: return generate_lineup()
 
-    # Staff Selection using Pitcher Game weights
     p_stats['Weight'] = p_stats['G'].clip(lower=1)
-    
     valid_starters = p_stats[p_stats['GS'] > 0]
     starter_row = valid_starters.sample(1, weights='Weight').iloc[0]
     
@@ -140,6 +192,9 @@ def generate_lineup():
 
     managers = ["Gil Hodges", "Davey Johnson", "Bobby Valentine", "Terry Collins", "Buck Showalter", "Carlos Mendoza", "Casey Stengel", "Yogi Berra"]
     mgr = random.choice(managers)
+    
+    if mgr == "Bobby Valentine" and random.random() < 0.25:
+        mgr = "Bobby Valentine (In Disguise) 🥸"
 
     score = calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), mgr)
     return lineup_pool, defense_map, starter_row, bp_rows, bench, mgr, score
@@ -148,7 +203,7 @@ def post_to_bluesky():
     try:
         lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
         
-        # TIME SYNC
+        # TIME SYNC: Baseline May 15, 2026 scheduling target
         et = pytz.timezone('America/New_York')
         game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
         
