@@ -96,7 +96,14 @@ def generate_lineup():
     
     # Process Pitcher Stats
     pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
-    pitchers_df['ERA+'] = pd.to_numeric(pitchers_df['ERA+'].str.replace(r'[^\d.]', '', regex=True) if pitchers_df['ERA+'].dtype == 'object' else pitchers_df['ERA+'], errors='coerce').fillna(100)
+    
+    # SAFEST PITCHER ERA+ PARSER: Safely strips out string characters from dirty columns
+    if 'ERA+' in pitchers_df.columns:
+        pitchers_df['ERA+'] = pitchers_df['ERA+'].astype(str).str.replace(r'[^\d.]', '', regex=True)
+        pitchers_df['ERA+'] = pd.to_numeric(pitchers_df['ERA+'], errors='coerce').fillna(100)
+    else:
+        pitchers_df['ERA+'] = 100
+        
     pitchers_df['ASG'] = pd.to_numeric(pitchers_df['ASG'], errors='coerce').fillna(0)
     
     p_stats = pitchers_df.groupby('Name').agg({
@@ -119,4 +126,59 @@ def generate_lineup():
     if not defense_map: return generate_lineup()
 
     # Staff Selection
-    valid_starters = p_stats
+    valid_starters = p_stats[p_stats['GS'] > 0]
+    starter_row = valid_starters.sample(1).iloc[0]
+    bp_rows = p_stats[p_stats['Name'] != starter_row['Name']].sample(4)
+
+    managers = ["Gil Hodges", "Davey Johnson", "Bobby Valentine", "Terry Collins", "Buck Showalter", "Carlos Mendoza", "Casey Stengel", "Yogi Berra"]
+    mgr = random.choice(managers)
+
+    score = calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), mgr)
+    return lineup_pool, defense_map, starter_row, bp_rows, bench, mgr, score
+
+def post_to_bluesky():
+    try:
+        lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
+        
+        # TIME SYNC: Baseline May 15, 2026 scheduling target
+        et = pytz.timezone('America/New_York')
+        game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
+        
+        status = get_status_label(score)
+
+        post_text = f"Game #{game_num}\n"
+        post_text += f"Amazin' Index: {score}/100 ({status})\n"
+        post_text += f"Mgr: {mgr}\n\n"
+        
+        for i, p in enumerate(lineup):
+            name = p['Player']
+            post_text += f"{i+1} {name} {defense[name]}\n"
+        post_text += f"\nP: {starter['Name']}"
+
+        reply_text = f"Bullpen: {', '.join(bp_rows['Name'])}\n\nBench: {', '.join([b['Player'] for b in bench])}"
+
+        # Initialize Client & Inject Custom HTTPX Transport Client Engine to pass TLS firewalls
+        client = Client(base_url='https://bsky.social')
+        
+        browser_headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        http_client = httpx.Client(headers=browser_headers, follow_redirects=True)
+        
+        # Force the engine proxy into the client property right before authenticating
+        client._request_client = http_client
+        
+        # Log in and drop the payload parameters
+        client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
+        
+        root = client.send_post(post_text)
+        parent_ref = {'cid': root.cid, 'uri': root.uri}
+        client.send_post(reply_text, reply_to={'root': parent_ref, 'parent': parent_ref})
+        
+        print(f"Successfully posted Game #{game_num}")
+    except Exception as e:
+        print(f"Post failed: {e}")
+
+if __name__ == "__main__":
+    post_to_bluesky()
