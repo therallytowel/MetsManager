@@ -76,13 +76,17 @@ def generate_lineup():
         hof_pitchers = p_stats[p_stats['Name'].isin(hof_list)]
         
         defense_map = None
-        while defense_map is None:
+        attempts = 0
+        while defense_map is None and attempts < 100:
+            attempts += 1
             mazzilli = hof_batters[hof_batters['Player'] == "Lee Mazzilli"].to_dict('records')[0]
-            # Sample 13 total to ensure 9 for lineup + 4 for bench
             pool = hof_batters[hof_batters['Player'] != "Lee Mazzilli"].sample(12).to_dict('records')
             lineup_pool = [mazzilli] + pool[:8]
             bench = pool[8:]
             defense_map = solve_defense(lineup_pool, ['C', '1B', '2B', '3B', 'SS', 'LF', 'RF', 'DH'])
+        
+        if defense_map is None:
+            raise Exception("Could not find a valid defensive configuration after 100 attempts.")
         
         defense_map["Lee Mazzilli"] = "CF"
         starter = hof_pitchers[hof_pitchers['GS'] > 0].sample(1).iloc[0]
