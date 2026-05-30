@@ -1,4 +1,4 @@
-import pandas as pd
+ import pandas as pd
 import random
 from atproto import Client
 import os
@@ -12,10 +12,8 @@ def solve_defense(players, required_positions):
     current_player = players[0]
     remaining_players = players[1:]
     eligible_pos = [p for p in required_positions if p in current_player['EligiblePositions']]
-    
     if 'DH' in required_positions:
         eligible_pos.append('DH')
-    
     random.shuffle(eligible_pos)
     for pos in eligible_pos:
         result = solve_defense(remaining_players, [p for p in required_positions if p != pos])
@@ -28,16 +26,12 @@ def calculate_amazin_index(lineup, starter_row, bp_rows, mgr_name):
     avg_ops = sum([float(p.get('OPS', 0.720)) for p in lineup]) / 9
     hitting_score = (avg_ops - 0.600) * 160
     hitting_score = max(0, min(hitting_score, 40)) 
-    
     s_era = float(starter_row.get('ERA+', 100))
     bp_era = sum([float(p.get('ERA+', 100)) for p in bp_rows]) / len(bp_rows)
-    
     pitching_score = ((s_era - 100) * 0.4) + ((bp_era - 100) * 0.2) + 20
     pitching_score = max(0, min(pitching_score, 40)) 
-    
     total_asg = sum([int(p.get('ASG', 0)) for p in lineup]) + int(starter_row.get('ASG', 0))
     legacy_boost = min(total_asg * 0.5, 10) 
-    
     final_score = hitting_score + pitching_score + legacy_boost + 10
     return round(max(15, min(final_score, 100)))
 
@@ -63,7 +57,6 @@ def generate_lineup():
     pitchers_df['GS'] = pd.to_numeric(pitchers_df['GS'], errors='coerce').fillna(0)
     pitchers_df['ERA+'] = pd.to_numeric(pitchers_df['ERA+'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(100)
     pitchers_df['ASG'] = pd.to_numeric(pitchers_df['ASG'], errors='coerce').fillna(0)
-    
     p_stats = pitchers_df.groupby('Name').agg({'GS': 'sum', 'G': 'sum', 'ERA+': 'mean', 'ASG': 'max'}).reset_index()
     
     et = pytz.timezone('America/New_York')
@@ -71,28 +64,26 @@ def generate_lineup():
     
     # --- SPECIAL HOF OVERRIDE BLOCK ---
     if today == date(2026, 5, 30):
-        hof_list = ["Bud Harrelson", "Rusty Staub", "Tom Seaver", "Jerry Koosman", "Ed Kranepool", "Cleon Jones", "Jerry Grote", "Tug McGraw", "Mookie Wilson", "Keith Hernandez", "Gary Carter", "Tommie Agee", "Dwight Gooden", "Darryl Strawberry", "John Franco", "Mike Piazza", "Jon Matlack", "Ron Darling", "Edgardo Alfonzo", "Howard Johnson", "Al Leiter", "David Wright", "Lee Mazzilli", "Kevin McReynolds"]
-        hof_batters = master_batters[master_batters['Player'].isin(hof_list)]
-        hof_pitchers = p_stats[p_stats['Name'].isin(hof_list)]
+        lineup_dict = {
+            "Lee Mazzilli": "CF", "Gary Carter": "C", "Keith Hernandez": "1B", 
+            "Edgardo Alfonzo": "2B", "David Wright": "3B", "Bud Harrelson": "SS",
+            "Cleon Jones": "LF", "Darryl Strawberry": "RF", "Rusty Staub": "DH"
+        }
+        bench_names = ["Mookie Wilson", "Ed Kranepool", "Howard Johnson", "Kevin McReynolds"]
+        starter_name = "Tom Seaver"
+        bp_names = ["Jerry Koosman", "Tug McGraw", "John Franco", "Dwight Gooden"]
         
-        defense_map = None
-        attempts = 0
-        while defense_map is None and attempts < 100:
-            attempts += 1
-            mazzilli = hof_batters[hof_batters['Player'] == "Lee Mazzilli"].to_dict('records')[0]
-            pool = hof_batters[hof_batters['Player'] != "Lee Mazzilli"].sample(12).to_dict('records')
-            lineup_pool = [mazzilli] + pool[:8]
-            bench = pool[8:]
-            defense_map = solve_defense(lineup_pool, ['C', '1B', '2B', '3B', 'SS', 'LF', 'RF', 'DH'])
+        lineup_pool = []
+        for name in lineup_dict.keys():
+            row = master_batters[master_batters['Player'] == name].iloc[0].to_dict()
+            lineup_pool.append(row)
+            
+        starter_row = p_stats[p_stats['Name'] == starter_name].iloc[0]
+        bp_rows = [p_stats[p_stats['Name'] == name].iloc[0].to_dict() for name in bp_names]
         
-        if defense_map is None:
-            raise Exception("Could not find a valid defensive configuration after 100 attempts.")
-        
-        defense_map["Lee Mazzilli"] = "CF"
-        starter = hof_pitchers[hof_pitchers['GS'] > 0].sample(1).iloc[0]
-        bp = hof_pitchers[~hof_pitchers['Name'].isin([starter['Name']])].sample(4)
         mgr = "Bobby Valentine (In Disguise) 🥸"
-        return lineup_pool, defense_map, starter, bp, bench, mgr, calculate_amazin_index(lineup_pool, starter, bp.to_dict('records'), mgr)
+        score = calculate_amazin_index(lineup_pool, starter_row, bp_rows, mgr)
+        return lineup_pool, lineup_dict, starter_row, bp_rows, bench_names, mgr, score
 
     # --- REGULAR SCRIPT ---
     clean_batters = master_batters[~master_batters['Player'].isin(p_stats['Name'])]
@@ -111,13 +102,14 @@ def post_to_bluesky():
         post_text = f"Game #{game_num}\nAmazin' Index: {score}/100\nMgr: {mgr}\n\n"
         for i, p in enumerate(lineup):
             name = p['Player']
-            pos = defense.get(name) or next((v for k, v in defense.items() if k.lower() == name.lower()), "N/A")
+            pos = defense[name] if isinstance(defense, dict) else (defense.get(name) or "N/A")
             post_text += f"{i+1} {name} {pos}\n"
         post_text += f"\nP: {starter['Name']}"
 
         bp_list = bp_rows.to_dict('records') if isinstance(bp_rows, pd.DataFrame) else bp_rows
         bp_names = ", ".join([p['Name'] for p in bp_list])
-        bench_names = ", ".join([b['Player'] for b in bench]) if bench else "None"
+        bench_names = ", ".join(bench) if isinstance(bench, list) else ", ".join([b['Player'] for b in bench])
+        
         reply_text = f"Bullpen: {bp_names}\n\nBench: {bench_names}"
 
         client = Client(base_url='https://bsky.social')
