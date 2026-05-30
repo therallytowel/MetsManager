@@ -6,6 +6,7 @@ import unicodedata
 from datetime import datetime, date
 import pytz
 import httpx
+import traceback
 
 def solve_defense(players, required_positions):
     if not players: return {}
@@ -87,4 +88,46 @@ def generate_lineup():
         bp_rows = hof_pitchers_df[hof_pitchers_df['Name'] != starter_row['Name']].sample(4)
         return lineup_pool, defense_map, starter_row, bp_rows, [], "Bobby Valentine (In Disguise) 🥸", calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), "Bobby V")
 
-    # Standard
+    clean_batters = master_batters[~master_batters['Player'].isin(p_stats['Name'])]
+    all_sampled = clean_batters.sample(14).to_dict('records')
+    lineup_pool = all_sampled[:9]
+    defense_map = solve_defense(lineup_pool, ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'])
+    starter_row = p_stats[p_stats['GS'] > 0].sample(1).iloc[0]
+    bp_rows = p_stats[p_stats['Name'] != starter_row['Name']].sample(4)
+    return lineup_pool, defense_map, starter_row, bp_rows, all_sampled[9:], "Terry Collins", calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), "Terry")
+
+def post_to_bluesky():
+    try:
+        lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
+        game_num = (datetime.now(pytz.timezone('America/New_York')).date() - date(2026, 5, 15)).days + 1
+        
+        post_text = f"Game #{game_num}\nAmazin' Index: {score}/100\nMgr: {mgr}\n\n"
+        for i, p in enumerate(lineup):
+            name = p['Player']
+            pos = defense.get(name) or next((v for k, v in defense.items() if k.lower() == name.lower()), "N/A")
+            post_text += f"{i+1} {name} {pos}\n"
+        post_text += f"\nP: {starter['Name']}"
+
+        bp_list = bp_rows.to_dict('records') if isinstance(bp_rows, pd.DataFrame) else bp_rows
+        bp_names = ", ".join([p['Name'] for p in bp_list])
+        bench_names = ", ".join([b['Player'] for b in bench]) if bench else "None"
+        reply_text = f"Bullpen: {bp_names}\n\nBench: {bench_names}"
+
+        client = Client(base_url='https://bsky.social')
+        client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
+        
+        print("Sending post...")
+        root = client.send_post(post_text)
+        print(f"Post successful: {root.uri}")
+        
+        parent_ref = {'cid': root.cid, 'uri': root.uri}
+        client.send_post(reply_text, reply_to={'root': parent_ref, 'parent': parent_ref})
+        print("Reply successful.")
+        
+    except Exception as e:
+        print(f"CRITICAL ERROR: {e}")
+        traceback.print_exc()
+        raise
+
+if __name__ == "__main__":
+    post_to_bluesky()
