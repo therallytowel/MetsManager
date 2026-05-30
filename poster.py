@@ -41,13 +41,6 @@ def calculate_amazin_index(lineup, starter_row, bp_rows, mgr_name):
     final_score = hitting_score + pitching_score + legacy_boost + 10
     return round(max(15, min(final_score, 100)))
 
-def get_status_label(score):
-    if score >= 88: return "World Series Favorites 🏆"
-    elif score >= 78: return "The 1986 Vibes 🍏"
-    elif score >= 68: return "Solid Wild Card Contender ⚾️"
-    elif score >= 55: return "The '73 Ya Gotta Believe Era 🏗️"
-    else: return "Panic Citi 😱"
-
 def generate_lineup():
     pos_df = pd.read_csv('Mets_Positional_History - Mets_Positional_History.csv', encoding='utf-8-sig')
     bat_df = pd.read_csv('mets_batters.csv', encoding='utf-8-sig')
@@ -94,32 +87,4 @@ def generate_lineup():
         bp_rows = hof_pitchers_df[hof_pitchers_df['Name'] != starter_row['Name']].sample(4)
         return lineup_pool, defense_map, starter_row, bp_rows, [], "Bobby Valentine (In Disguise) 🥸", calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), "Bobby V")
 
-    # Standard logic...
-    clean_batters = master_batters[~master_batters['Player'].isin(p_stats['Name'])]
-    all_sampled = clean_batters.sample(14).to_dict('records')
-    lineup_pool = all_sampled[:9]
-    defense_map = solve_defense(lineup_pool, ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'])
-    starter_row = p_stats[p_stats['GS'] > 0].sample(1).iloc[0]
-    bp_rows = p_stats[p_stats['Name'] != starter_row['Name']].sample(4)
-    return lineup_pool, defense_map, starter_row, bp_rows, all_sampled[9:], "Terry Collins", calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), "Terry")
-
-def post_to_bluesky():
-    try:
-        lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
-        game_num = (datetime.now(pytz.timezone('America/New_York')).date() - date(2026, 5, 15)).days + 1
-        
-        post_text = f"Game #{game_num}\nAmazin' Index: {score}/100\nMgr: {mgr}\n\n"
-        for i, p in enumerate(lineup):
-            name = p['Player']
-            pos = defense.get(name) or next((v for k, v in defense.items() if k.lower() == name.lower()), "N/A")
-            post_text += f"{i+1} {name} {pos}\n"
-        post_text += f"\nP: {starter['Name']}"
-
-        client = Client(base_url='https://bsky.social')
-        client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
-        client.send_post(post_text)
-    except Exception as e:
-        print(f"Post failed: {e}")
-
-if __name__ == "__main__":
-    post_to_bluesky()
+    # Standard
