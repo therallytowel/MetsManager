@@ -82,37 +82,35 @@ def generate_lineup():
         hof_batters_df = master_batters[master_batters['Player'].isin(hof_players)].copy()
         hof_pitchers_df = p_stats[p_stats['Name'].isin(hof_players)].copy()
         
-        mazzilli_row = hof_batters_df[hof_batters_df['Player'] == "Lee Mazzilli"].to_dict('records')[0]
-        other_hof_batters = hof_batters_df[hof_batters_df['Player'] != "Lee Mazzilli"]
-        sampled_batters = other_hof_batters.sample(13).to_dict('records')
+        defense_map = None
+        while defense_map is None:
+            mazzilli_row = hof_batters_df[hof_batters_df['Player'] == "Lee Mazzilli"].to_dict('records')[0]
+            other_hof_batters = hof_batters_df[hof_batters_df['Player'] != "Lee Mazzilli"].sample(8).to_dict('records')
+            lineup_pool = [mazzilli_row] + other_hof_batters
+            defense_map = solve_defense(other_hof_batters, ['C', '1B', '2B', '3B', 'SS', 'LF', 'RF', 'DH'])
         
-        lineup_pool = [mazzilli_row] + sampled_batters[:8]
-        bench = sampled_batters[8:]
-        
-        defense_map = solve_defense([p for p in lineup_pool if p['Player'] != "Lee Mazzilli"], ['C', '1B', '2B', '3B', 'SS', 'LF', 'RF', 'DH'])
         defense_map["Lee Mazzilli"] = "CF"
-        
         starter_row = hof_pitchers_df[hof_pitchers_df['GS'] > 0].sample(1).iloc[0]
         bp_rows = hof_pitchers_df[hof_pitchers_df['Name'] != starter_row['Name']].sample(4)
-        
-        mgr = "Bobby Valentine (In Disguise) 🥸"
-        score = calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), mgr)
-        return lineup_pool, defense_map, starter_row, bp_rows, bench, mgr, score
-    
-    # ... (Rest of your standard logic remains here) ...
-    return lineup_pool, defense_map, starter_row, bp_rows, bench, mgr, score
+        return lineup_pool, defense_map, starter_row, bp_rows, [], "Bobby Valentine (In Disguise) 🥸", calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), "Bobby V")
+
+    # Standard logic...
+    clean_batters = master_batters[~master_batters['Player'].isin(p_stats['Name'])]
+    all_sampled = clean_batters.sample(14).to_dict('records')
+    lineup_pool = all_sampled[:9]
+    defense_map = solve_defense(lineup_pool, ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'])
+    starter_row = p_stats[p_stats['GS'] > 0].sample(1).iloc[0]
+    bp_rows = p_stats[p_stats['Name'] != starter_row['Name']].sample(4)
+    return lineup_pool, defense_map, starter_row, bp_rows, all_sampled[9:], "Terry Collins", calculate_amazin_index(lineup_pool, starter_row, bp_rows.to_dict('records'), "Terry")
 
 def post_to_bluesky():
     try:
         lineup, defense, starter, bp_rows, bench, mgr, score = generate_lineup()
-        et = pytz.timezone('America/New_York')
-        game_num = (datetime.now(et).date() - date(2026, 5, 15)).days + 1
+        game_num = (datetime.now(pytz.timezone('America/New_York')).date() - date(2026, 5, 15)).days + 1
         
         post_text = f"Game #{game_num}\nAmazin' Index: {score}/100\nMgr: {mgr}\n\n"
-        
         for i, p in enumerate(lineup):
             name = p['Player']
-            # Forgiving lookup: finds match even if case is slightly off
             pos = defense.get(name) or next((v for k, v in defense.items() if k.lower() == name.lower()), "N/A")
             post_text += f"{i+1} {name} {pos}\n"
         post_text += f"\nP: {starter['Name']}"
@@ -120,7 +118,6 @@ def post_to_bluesky():
         client = Client(base_url='https://bsky.social')
         client.login(os.environ['BSKY_HANDLE'], os.environ['BSKY_PASSWORD'])
         client.send_post(post_text)
-        print(f"Successfully posted Game #{game_num}")
     except Exception as e:
         print(f"Post failed: {e}")
 
