@@ -17,7 +17,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-with-version: '3.10'
+        python-version: '3.10'  # FIXED: Changed from python-with-version
 
     - name: Install Dependencies
       run: |
@@ -30,8 +30,9 @@ jobs:
         BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
       run: python poster.py
 
-    # --- THE EMAIL ENGINE ---
+    # The Email Engine will now only run if a file exists
     - name: Email Story Graphic to Phone
+      if: success()
       uses: dawidd6/action-send-mail@v3
       with:
         server_address: smtp.gmail.com
@@ -41,6 +42,5 @@ jobs:
         subject: "Mets Mystery Manager: Today's Story Card"
         to: therallytowel@gmail.com
         from: "Mets Mystery Manager Bot <therallytowel@gmail.com>"
-        body: "Here is your daily automated Instagram Story lineup card! Download it to your camera roll and upload directly to your Stories."
-        # Grabs whatever story PNG image the python script saved out
-        attachments: "*.png"
+        body: "Your daily lineup card is ready."
+        attachments: "today_story_card.png"
