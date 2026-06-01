@@ -1,46 +1,30 @@
-name: Mets Mystery Manager Daily Drop
+name: Mets Mystery Manager Daily
 
 on:
   schedule:
-    # Runs daily at 11:45 AM Eastern (15:45 UTC)
+    # 15:45 UTC translates to 11:45 AM Eastern Daylight Time (EDT)
+    # Ticking at :45 avoids top-of-the-hour queue traffic on GitHub's shared runners.
     - cron: '45 15 * * *'
-  workflow_dispatch: # Allows you to trigger it manually anytime
+  
+  workflow_dispatch: # Keeps your manual trigger button active in the UI
 
 jobs:
-  run-bot:
+  post_lineup:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'  # FIXED: Changed from python-with-version
+      - name: Install Dependencies
+        # Added httpx to work seamlessly with the overhauled poster.py network engine
+        run: pip install pandas atproto pytz httpx
 
-    - name: Install Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pandas atproto pytz httpx pillow
-
-    - name: Run Lineup Generator
-      env:
-        BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
-        BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
-      run: python poster.py
-
-    # The Email Engine will now only run if a file exists
-    - name: Email Story Graphic to Phone
-      if: success()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 465
-        username: ${{ secrets.MAIL_USERNAME }}
-        password: ${{ secrets.MAIL_PASSWORD }}
-        subject: "Mets Mystery Manager: Today's Story Card"
-        to: therallytowel@gmail.com
-        from: "Mets Mystery Manager Bot <therallytowel@gmail.com>"
-        body: "Your daily lineup card is ready."
-        attachments: "today_story_card.png"
+      - name: Run Script
+        env:
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+        run: python poster.py
